@@ -50,35 +50,49 @@ def process_payment_files(uploaded_payment_files):
     df_payment_cleaned['OrderID'] = df_payment_cleaned['OrderID'].astype(str)
     df_payment_cleaned['amount'] = pd.to_numeric(df_payment_cleaned['amount'], errors='coerce').fillna(0)
     
-    # Create Raw Payment Data for detailed breakdown view
+    # Create Raw Payment Data (kept only for compatibility, not used in final export)
     charge_breakdown_cols = ['OrderID', 'transaction-type', 'marketplace-name', 'amount-type', 'amount-description', 'amount', 'posted-date', 'settlement-id']
     df_charge_breakdown = df_payment_cleaned[charge_breakdown_cols]
     
-    # --- PIVOTING: Calculate CLASSIFIED AMOUNTS per OrderID (New Requirement) ---
+    # --- PIVOTING: Calculate CLASSIFIED AMOUNTS per OrderID (NEW BIFURCATION) ---
     
-    # 1. Net Settlement Amount (Total Payment) - For Net Fetching
-    df_net_payment = df_charge_breakdown.groupby('OrderID')['amount'].sum().reset_index(name='Net_Payment_Fetched')
+    # Helper function for fee calculation
+    def calculate_fee_total(df, keyword, name):
+        # Filter and sum the absolute value (since fees are negative)
+        df_fee = df[df['amount-description'].str.contains(keyword, case=False, na=False)]
+        df_summary = df_fee.groupby('OrderID')['amount'].sum().reset_index(name=name)
+        df_summary[name] = df_summary[name].abs()
+        return df_summary
+        
+    # 1. Net Settlement Amount (Total Payment)
+    df_financial_master = df_charge_breakdown.groupby('OrderID')['amount'].sum().reset_index(name='Net_Payment_Fetched')
     
-    # 2. Total Amazon Fees (Cost)
-    fee_descriptions = [
-        'FBA Pick & Pack Fee', 'FBA Weight Handling Fee', 'Commission', 
-        'Fixed closing fee', 'Refund commission', 'Technology Fee'
-    ]
-    df_fees = df_charge_breakdown[df_charge_breakdown['amount-description'].str.contains('|'.join(fee_descriptions), case=False, na=False)]
-    df_fees_summary = df_fees.groupby('OrderID')['amount'].sum().reset_index(name='Total_Fees')
-    df_fees_summary['Total_Fees'] = df_fees_summary['Total_Fees'].abs()
+    # 2. Bifurcated Fees (Total Fees is removed, individual fees are added)
+    df_comm = calculate_fee_total(df_charge_breakdown, 'Commission', 'Total_Commission_Fee')
+    df_fixed = calculate_fee_total(df_charge_breakdown, 'Fixed closing fee', 'Total_Fixed_Closing_Fee')
+    df_pick = calculate_fee_total(df_charge_breakdown, 'Pick & Pack Fee', 'Total_FBA_Pick_Pack_Fee')
+    df_weight = calculate_fee_total(df_charge_breakdown, 'Weight Handling Fee', 'Total_FBA_Weight_Handling_Fee')
+    df_tech = calculate_fee_total(df_charge_breakdown, 'Technology Fee', 'Total_Technology_Fee')
     
     # 3. Total Tax/TDS/TCS Components
     tax_descriptions = ['TCS', 'TDS', 'Tax']
-    df_tax = df_charge_breakdown[df_charge_breakdown['amount-description'].str.contains('|'.join(tax_descriptions), case=False, na=False)]
-    df_tax_summary = df_tax.groupby('OrderID')['amount'].sum().reset_index(name='Total_Tax_TCS_TDS')
-    df_tax_summary['Total_Tax_TCS_TDS'] = df_tax_summary['Total_Tax_TCS_TDS'].abs()
+    df_tax_summary = calculate_fee_total(df_charge_breakdown, '|'.join(tax_descriptions), 'Total_Tax_TCS_TDS')
 
 
-    # --- FINAL FINANCIAL MASTER MERGE (Net Payment + Fees + Tax) ---
-    df_financial_master = df_net_payment
-    df_financial_master = pd.merge(df_financial_master, df_fees_summary, on='OrderID', how='left').fillna(0)
-    df_financial_master = pd.merge(df_financial_master, df_tax_summary, on='OrderID', how='left').fillna(0)
+    # --- FINAL FINANCIAL MASTER MERGE (Net Payment + Fees Bifurcation + Tax) ---
+    
+    # Merge individual fees and tax onto the Net Payment master
+    for df in [df_comm, df_fixed, df_pick, df_weight, df_tech, df_tax_summary]: 
+        df_financial_master = pd.merge(df_financial_master, df, on='OrderID', how='left').fillna(0)
+    
+    # Calculate the old Total_Fees for KPI card consistency
+    df_financial_master['Total_Fees_KPI'] = (
+        df_financial_master['Total_Commission_Fee'] +
+        df_financial_master['Total_Fixed_Closing_Fee'] +
+        df_financial_master['Total_FBA_Pick_Pack_Fee'] +
+        df_financial_master['Total_FBA_Weight_Handling_Fee'] +
+        df_financial_master['Total_Technology_Fee']
+    )
     
     return df_financial_master, df_charge_breakdown 
 
@@ -141,26 +155,17 @@ def create_final_reconciliation_df(df_financial_master, df_logistics_master):
     # Rename Net Payment column for clarity on screen
     df_final.rename(columns={'Net_Payment_Fetched': 'Net Payment'}, inplace=True)
     
-    # **FIXED:** Removed the MTR_vs_Payment_Difference calculation.
-    
     return df_final
 
 
-# --- EXPORT FUNCTION ---
+# --- EXPORT FUNCTION (Single Sheet Only) ---
 @st.cache_data
-def convert_to_excel(df_reconciliation, df_payment_raw_breakdown):
-    """Creates a multi-sheet Excel file for export."""
-    
-    df_breakdown_export = df_payment_raw_breakdown[[
-        'OrderID', 'transaction-type', 'amount-type', 
-        'amount-description', 'amount', 'posted-date', 
-        'marketplace-name', 'settlement-id'
-    ]].sort_values(by='OrderID')
+def convert_to_excel(df_reconciliation): # Removed df_payment_raw_breakdown
+    """Creates a single-sheet Excel file for export."""
     
     output = io.BytesIO()
     with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
         df_reconciliation.to_excel(writer, sheet_name='Reconciliation Summary', index=False)
-        df_breakdown_export.to_excel(writer, sheet_name='Payment Breakdown', index=False)
     
     return output.getvalue()
 
@@ -202,11 +207,11 @@ if payment_files and mtr_files:
     
     # --- Dashboard Display ---
     
-    # KPI Cards (Key Metrics)
+    # KPI Cards (Key Metrics) - Use Total_Fees_KPI for the sum
     total_orders = df_reconciliation.shape[0]
     total_mtr_billed = df_reconciliation['MTR Invoice Amount'].sum()
     total_payment_fetched = df_reconciliation['Net Payment'].sum()
-    total_fees = df_reconciliation['Total_Fees'].sum()
+    total_fees = df_reconciliation['Total_Fees_KPI'].sum() # Updated to use the new total column
     total_tax = df_reconciliation['Total_Tax_TCS_TDS'].sum()
 
     st.subheader("Key Business Metrics (Based on Item Reconciliation)")
@@ -220,7 +225,7 @@ if payment_files and mtr_files:
     st.markdown("---")
 
     # Order ID Selection is now for the filtered display of the summary
-    st.header("1. Item-Level Reconciliation Summary (MTR Details + Payment Classification)")
+    st.header("1. Item-Level Reconciliation Summary (MTR Details + Classified Charges)")
     
     order_id_list = ['All Orders'] + sorted(df_reconciliation['OrderID'].unique().tolist())
     selected_order_id = st.selectbox("👉 Select Order ID to Filter Summary:", order_id_list)
@@ -237,14 +242,14 @@ if payment_files and mtr_files:
 
     # --- EXPORT SECTION ---
     st.header("2. Download Full Reconciliation Report")
-    st.info("The Excel file will contain two sheets: 1. Reconciliation Summary (Item Details + Classified Charges) and 2. Payment Breakdown (All raw charges).")
+    st.info("The Excel file will contain a single sheet with Item Details and all Classified Charges.")
 
-    excel_data = convert_to_excel(df_reconciliation, df_payment_raw_breakdown)
+    excel_data = convert_to_excel(df_reconciliation) # Updated function call
     
     st.download_button(
-        label="Download Full Excel Report (Summary + Breakdown)",
+        label="Download Full Excel Report (Reconciliation Summary)",
         data=excel_data,
-        file_name='full_amazon_reconciliation_report.xlsx',
+        file_name='amazon_reconciliation_summary.xlsx', # Renamed file for clarity
         mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
     )
     
