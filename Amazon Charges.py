@@ -5,7 +5,7 @@ import io
 
 # --- Configuration ---
 st.set_page_config(layout="wide", page_title="Amazon Seller Reconciliation Dashboard")
-st.title("💰 Amazon Seller Central Reconciliation Dashboard")
+st.title("💰 Amazon Seller Central Reconciliation Dashboard (Detailed)")
 st.markdown("---")
 
 
@@ -13,107 +13,65 @@ st.markdown("---")
 
 @st.cache_data(show_spinner="Processing Payment Files and Creating Financial Master...")
 def process_payment_files(uploaded_payment_files):
-    """Reads all uploaded TXT payment files, combines them, and creates two outputs."""
+    """Reads all uploaded TXT payment files, creates the financial summary (Net Sales) and raw breakdown."""
     
     all_payment_data = []
     
-    # Define Column Names (based on the common 24 columns)
+    # Define Column Names manually 
     cols = ['settlement-id', 'settlement-start-date', 'settlement-end-date', 'deposit-date', 
             'total-amount', 'currency', 'transaction-type', 'order-id', 'merchant-order-id', 
             'adjustment-id', 'shipment-id', 'marketplace-name', 'amount-type', 
             'amount-description', 'amount', 'fulfillment-id', 'posted-date', 
             'posted-date-time', 'order-item-code', 'merchant-order-item-id', 
-            'merchant-adjustment-item-id', 'sku', 'quantity-purchased', 'promotion-id']
+            'merchant-adjustment-item-id', 'sku', 'quantity-purchased', 'promotion-id'] # 24 columns
 
     for file in uploaded_payment_files:
         try:
-            # FIX: Use header=1 and skipinitialspace=True. 
-            # We don't use 'names=cols' directly here because of varying column counts.
             df_temp = pd.read_csv(io.StringIO(file.getvalue().decode("latin-1")), 
                                   sep='\t', 
                                   skipinitialspace=True,
-                                  header=1,
-                                  dtype=str) # Read everything as string first
+                                  header=1) # FIX: Use header=1 
             
-            # FIX: Rename the known column 'order-id' before checking
-            df_temp.rename(columns={df_temp.columns[7]: 'order-id', df_temp.columns[0]: 'settlement-id'}, inplace=True)
+            # FIX: Normalize Column Count for files with extra columns
+            if len(df_temp.columns) > len(cols):
+                df_temp = df_temp.iloc[:, :len(cols)]
+            df_temp.columns = cols 
             
-            # If the number of columns is not 24, we need to handle the merge manually
-            if len(df_temp.columns) > 24:
-                 # Drop the last few unexpected columns to match the standard
-                 df_temp = df_temp.iloc[:, :24]
-                 df_temp.columns = cols # Apply standard names to the trimmed dataframe
-            elif len(df_temp.columns) == 24:
-                 df_temp.columns = cols
-            else:
-                 # If fewer than 24, there's a serious problem, stop processing this file.
-                 st.warning(f"File {file.name} has unexpected number of columns ({len(df_temp.columns)}). Skipping.")
-                 continue
-
             all_payment_data.append(df_temp)
         except Exception as e:
-            st.error(f"Error reading {file.name}: {e}")
+            st.error(f"Error reading {file.name}: The file structure is unexpected. Details: {e}")
             return pd.DataFrame(), pd.DataFrame()
     
-    # Rest of the concatenation and processing logic remains the same (and is now robust)
     df_payment_raw = pd.concat(all_payment_data, ignore_index=True)
-    
-    # ... (Rest of the cleaning and merging logic is the same) ...
-
-    # Cleaning: Remove summary rows and convert amount to numeric
     df_payment_cleaned = df_payment_raw.dropna(subset=['order-id']).copy()
     
     df_payment_cleaned.rename(columns={'order-id': 'OrderID'}, inplace=True)
     df_payment_cleaned['OrderID'] = df_payment_cleaned['OrderID'].astype(str)
-    
     df_payment_cleaned['amount'] = pd.to_numeric(df_payment_cleaned['amount'], errors='coerce').fillna(0)
     
     # Create Raw Payment Data for detailed breakdown view
     charge_breakdown_cols = ['OrderID', 'transaction-type', 'marketplace-name', 'amount-type', 'amount-description', 'amount', 'posted-date', 'settlement-id']
     df_charge_breakdown = df_payment_cleaned[charge_breakdown_cols]
     
-    # --- PIVOTING: Create Financial Master Summary ---
-    principal_df = df_charge_breakdown[df_charge_breakdown['amount-description'] == 'Principal'].groupby('OrderID')['amount'].sum().reset_index(name='Total_Principal')
+    # --- PIVOTING: Calculate Total Net Amount (Revenue - Fees) per OrderID ---
     
-    fee_descriptions = [
-        'FBA Pick & Pack Fee', 'FBA Weight Handling Fee', 'Commission', 
-        'Fixed closing fee', 'Technology Fee', 'Refund commission',
-        'FBA Pick & Pack Fee CGST', 'FBA Pick & Pack Fee SGST', 
-        'FBA Weight Handling Fee CGST', 'FBA Weight Handling Fee SGST',
-        'Commission IGST', 'Fixed closing fee IGST', 'Technology Fee IGST',
-        'Refund commission IGST', 'Commission CGST', 'Commission SGST',
-        'Fixed closing fee CGST', 'Fixed closing fee SGST'
-    ]
+    # Calculate Total Amount (Sum of all 'amount' entries for an order)
+    # This automatically includes Principal, Fees, Tax, etc., and provides the Net Settlement amount from payment report
+    df_financial_master = df_charge_breakdown.groupby('OrderID')['amount'].sum().reset_index(name='Net_Sale_Value_P')
     
-    df_fees = df_charge_breakdown[df_charge_breakdown['amount-description'].isin(fee_descriptions)]
-    fees_summary_df = df_fees.groupby('OrderID')['amount'].sum().reset_index(name='Total_Amazon_Fees')
-    fees_summary_df['Total_Amazon_Fees'] = fees_summary_df['Total_Amazon_Fees'].abs()
-    
-    # --- Robust Merging Logic (Fixes Ambiguous Series Error) ---
-    all_order_ids = pd.concat([principal_df['OrderID'], fees_summary_df['OrderID']]).unique()
-    df_financial_master = pd.DataFrame(all_order_ids, columns=['OrderID'])
-    
-    df_financial_master = pd.merge(df_financial_master, principal_df, on='OrderID', how='left').fillna({'Total_Principal': 0})
-    df_financial_master = pd.merge(df_financial_master, fees_summary_df, on='OrderID', how='left').fillna({'Total_Amazon_Fees': 0})
-    
-    df_financial_master['Total_Principal'] = pd.to_numeric(df_financial_master['Total_Principal'])
-    df_financial_master['Total_Amazon_Fees'] = pd.to_numeric(df_financial_master['Total_Amazon_Fees'])
-
-    return df_financial_master, df_charge_breakdown
+    return df_financial_master, df_charge_breakdown # Financial master is now just Net_Sale_Value_P
 
 
-@st.cache_data(show_spinner="Processing MTR Files and Creating Logistics Master...")
+@st.cache_data(show_spinner="Processing MTR Files and Creating Detailed Logistics Master...")
 def process_mtr_files(uploaded_mtr_files):
-    """Reads all uploaded CSV MTR files, combines them, and creates a summary of MTR billed amount per OrderID."""
+    """Reads all uploaded CSV MTR files and concatenates them, keeping item-level detail."""
     
     all_mtr_data = []
     
     for file in uploaded_mtr_files:
         try:
             df_temp = pd.read_csv(file) 
-            
-            # FIX: Clean up Unnamed columns which might cause issues during concatenation
-            df_temp = df_temp.loc[:, ~df_temp.columns.str.contains('^Unnamed')]
+            df_temp = df_temp.loc[:, ~df_temp.columns.str.contains('^Unnamed')] # Clean Unnamed columns
             
             all_mtr_data.append(df_temp)
         except Exception as e:
@@ -121,35 +79,43 @@ def process_mtr_files(uploaded_mtr_files):
             return pd.DataFrame()
         
     df_mtr_raw = pd.concat(all_mtr_data, ignore_index=True)
-    df_mtr_raw.rename(columns={'Order Id': 'OrderID', 'Invoice Amount': 'MTR Invoice Amount'}, inplace=True)
-    df_mtr_raw['OrderID'] = df_mtr_raw['OrderID'].astype(str)
-    df_mtr_raw['MTR Invoice Amount'] = pd.to_numeric(df_mtr_raw['MTR Invoice Amount'], errors='coerce').fillna(0)
     
-    df_logistics_master = df_mtr_raw.groupby('OrderID')['MTR Invoice Amount'].sum().reset_index(name='Total_MTR_Billed')
+    # Rename for consistency
+    df_mtr_raw.rename(columns={'Order Id': 'OrderID', 'Invoice Amount': 'MTR Invoice Amount'}, inplace=True)
+    
+    # Select only the columns required by the user (MTR Table Update requirement)
+    required_mtr_cols = [
+        'Invoice Number', 'Invoice Date', 'Transaction Type', 'OrderID', 
+        'Quantity', 'Sku', 'Ship From City', 'Ship To City', 'Ship To State', 
+        'MTR Invoice Amount'
+    ]
+    df_logistics_master = df_mtr_raw[required_mtr_cols].copy()
+    
+    # Cleaning
+    df_logistics_master['OrderID'] = df_logistics_master['OrderID'].astype(str)
+    df_logistics_master['MTR Invoice Amount'] = pd.to_numeric(df_logistics_master['MTR Invoice Amount'], errors='coerce').fillna(0)
     
     return df_logistics_master
 
 
 @st.cache_data(show_spinner="Merging data and finalizing calculations...")
 def create_final_reconciliation_df(df_financial_master, df_logistics_master):
-    """Merges financial and logistics master data and calculates final net settlement."""
+    """Merges detailed MTR data with Payment Net Sale Value."""
     
+    # Perform Left Merge: MTR data is the primary base, Payment data is fetched
     df_final = pd.merge(
-        df_financial_master, 
         df_logistics_master, 
+        df_financial_master, 
         on='OrderID', 
-        how='outer'
+        how='left'
     ).fillna(0)
     
-    # Final Calculation: Principal - Amazon Fees - MTR Billed
-    df_final['Net_Settlement'] = df_final['Total_Principal'] - df_final['Total_Amazon_Fees'] - df_final['Total_MTR_Billed']
+    # Rename Payment column as requested by user
+    df_final.rename(columns={'Net_Sale_Value_P': 'Payment for OrderID'}, inplace=True)
     
-    df_final['Status'] = np.select(
-        [df_final['Net_Settlement'] > 0, df_final['Net_Settlement'] < 0],
-        ['Profit', 'Loss'],
-        default='Break Even'
-    )
-
+    # Calculate difference
+    df_final['MTR_vs_Payment_Difference'] = df_final['Payment for OrderID'] - df_final['MTR Invoice Amount']
+    
     return df_final
 
 
@@ -158,7 +124,6 @@ def create_final_reconciliation_df(df_financial_master, df_logistics_master):
 def convert_to_excel(df_reconciliation, df_payment_raw_breakdown):
     """Creates a multi-sheet Excel file for export."""
     
-    # Prepare data for detailed breakdown sheet
     df_breakdown_export = df_payment_raw_breakdown[[
         'OrderID', 'transaction-type', 'amount-type', 
         'amount-description', 'amount', 'posted-date', 
@@ -201,6 +166,7 @@ if payment_files and mtr_files:
 
     # Check for errors in file processing before continuing
     if df_financial_master.empty or df_logistics_master.empty:
+        st.error("Data processing failed. Please check file formatting or look for error messages above.")
         st.stop()
     
     # Create Final Reconciliation DF
@@ -211,23 +177,19 @@ if payment_files and mtr_files:
     
     # KPI Cards (Key Metrics)
     total_orders = df_reconciliation.shape[0]
-    total_principal = df_reconciliation['Total_Principal'].sum()
-    total_fees = df_reconciliation['Total_Amazon_Fees'].sum()
-    total_mtr = df_reconciliation['Total_MTR_Billed'].sum()
-    net_settlement_value = df_reconciliation['Net_Settlement'].sum()
+    total_mtr_billed = df_reconciliation['MTR Invoice Amount'].sum()
+    total_payment_fetched = df_reconciliation['Payment for OrderID'].sum()
 
-    st.subheader("Key Business Metrics")
-    col_kpi1, col_kpi2, col_kpi3, col_kpi4 = st.columns(4)
-    col_kpi1.metric("Total Reconciled Orders", f"{total_orders:,}")
-    col_kpi2.metric("Total Principal (Revenue)", f"INR {total_principal:,.2f}")
-    col_kpi3.metric("Total Amazon Fees", f"INR {total_fees:,.2f}")
-    col_kpi4.metric("Net Settlement Value", f"INR {net_settlement_value:,.2f}", 
-                    delta=f"MTR Cost: -INR {total_mtr:,.2f}")
+    st.subheader("Key Business Metrics (Based on MTR Items)")
+    col_kpi1, col_kpi2, col_kpi3 = st.columns(3)
+    col_kpi1.metric("Total Reconciled Items", f"{total_orders:,}")
+    col_kpi2.metric("Total MTR Invoiced", f"INR {total_mtr_billed:,.2f}")
+    col_kpi3.metric("Total Payment Fetched", f"INR {total_payment_fetched:,.2f}")
     
     st.markdown("---")
 
     # Order ID Selection is now for the filtered display of the summary
-    st.header("1. Order-Level Reconciliation Summary")
+    st.header("1. Item-Level Reconciliation Summary")
     
     order_id_list = ['All Orders'] + sorted(df_reconciliation['OrderID'].unique().tolist())
     selected_order_id = st.selectbox("👉 Select Order ID to Filter Summary:", order_id_list)
@@ -235,7 +197,7 @@ if payment_files and mtr_files:
     if selected_order_id != 'All Orders':
         df_display = df_reconciliation[df_reconciliation['OrderID'] == selected_order_id]
     else:
-        df_display = df_reconciliation.sort_values(by='Net_Settlement', ascending=False)
+        df_display = df_reconciliation.sort_values(by='OrderID', ascending=True)
     
     # Display the primary reconciliation table
     st.dataframe(df_display, use_container_width=True, hide_index=True)
@@ -244,7 +206,7 @@ if payment_files and mtr_files:
 
     # --- EXPORT SECTION ---
     st.header("2. Download Full Reconciliation Report")
-    st.info("The Excel file will contain two sheets: 1. Reconciliation Summary (Screen Data) and 2. Payment Breakdown (All charges per Order ID).")
+    st.info("The Excel file will contain two sheets: 1. Reconciliation Summary (Item Details) and 2. Payment Breakdown (All charges).")
 
     excel_data = convert_to_excel(df_reconciliation, df_payment_raw_breakdown)
     
