@@ -9,6 +9,43 @@ st.title("💰 Amazon Seller Central Reconciliation Dashboard (Detailed)")
 st.markdown("---")
 
 
+# --- HELPER FUNCTIONS ---
+
+@st.cache_data
+def create_cost_sheet_template():
+    """Generates a simple Excel template for Cost Sheet."""
+    template_data = {
+        'SKU': ['ExampleSKU-001', 'ExampleSKU-002'],
+        'Product Cost': [150.50, 220.00]
+    }
+    df = pd.DataFrame(template_data)
+    
+    output = io.BytesIO()
+    with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
+        df.to_excel(writer, sheet_name='Cost_Sheet_Template', index=False)
+    
+    return output.getvalue()
+
+@st.cache_data(show_spinner="Processing Cost Sheet...")
+def process_cost_sheet(uploaded_file):
+    """Reads the uploaded cost sheet and prepares it for merging."""
+    try:
+        df_cost = pd.read_excel(uploaded_file)
+        # Assuming the template columns are 'SKU' and 'Product Cost'
+        df_cost.rename(columns={'SKU': 'Sku'}, inplace=True) # Rename to match MTR Sku column
+        df_cost['Sku'] = df_cost['Sku'].astype(str)
+        df_cost['Product Cost'] = pd.to_numeric(df_cost['Product Cost'], errors='coerce').fillna(0)
+        
+        # Aggregate in case of multiple cost entries per SKU (e.g., taking average/first one)
+        # For simplicity, we take the average cost if duplicates exist
+        df_cost_master = df_cost.groupby('Sku')['Product Cost'].mean().reset_index(name='Product Cost')
+
+        return df_cost_master
+    except Exception as e:
+        st.error(f"Error reading Cost Sheet: Please ensure the file is an Excel file with 'SKU' and 'Product Cost' columns. Details: {e}")
+        return pd.DataFrame()
+
+
 # --- 1. Data Processing Functions ---
 
 @st.cache_data(show_spinner="Processing Payment Files and Creating Financial Master...")
@@ -27,13 +64,11 @@ def process_payment_files(uploaded_payment_files):
 
     for file in uploaded_payment_files:
         try:
-            # FIX: Use header=1 to skip the primary header row and read files robustly
             df_temp = pd.read_csv(io.StringIO(file.getvalue().decode("latin-1")), 
                                   sep='\t', 
                                   skipinitialspace=True,
                                   header=1)
             
-            # FIX: Normalize Column Count for files with extra columns
             if len(df_temp.columns) > len(cols):
                 df_temp = df_temp.iloc[:, :len(cols)]
             df_temp.columns = cols 
@@ -50,42 +85,35 @@ def process_payment_files(uploaded_payment_files):
     df_payment_cleaned['OrderID'] = df_payment_cleaned['OrderID'].astype(str)
     df_payment_cleaned['amount'] = pd.to_numeric(df_payment_cleaned['amount'], errors='coerce').fillna(0)
     
-    # Create Raw Payment Data (kept only for compatibility, not used in final export)
     charge_breakdown_cols = ['OrderID', 'transaction-type', 'marketplace-name', 'amount-type', 'amount-description', 'amount', 'posted-date', 'settlement-id']
     df_charge_breakdown = df_payment_cleaned[charge_breakdown_cols]
     
-    # --- PIVOTING: Calculate CLASSIFIED AMOUNTS per OrderID (NEW BIFURCATION) ---
+    # --- PIVOTING: Calculate CLASSIFIED AMOUNTS per OrderID ---
     
-    # Helper function for fee calculation
     def calculate_fee_total(df, keyword, name):
-        # Filter and sum the absolute value (since fees are negative)
         df_fee = df[df['amount-description'].str.contains(keyword, case=False, na=False)]
         df_summary = df_fee.groupby('OrderID')['amount'].sum().reset_index(name=name)
         df_summary[name] = df_summary[name].abs()
         return df_summary
         
-    # 1. Net Settlement Amount (Total Payment)
     df_financial_master = df_charge_breakdown.groupby('OrderID')['amount'].sum().reset_index(name='Net_Payment_Fetched')
     
-    # 2. Bifurcated Fees (Total Fees is removed, individual fees are added)
+    # Bifurcated Fees
     df_comm = calculate_fee_total(df_charge_breakdown, 'Commission', 'Total_Commission_Fee')
     df_fixed = calculate_fee_total(df_charge_breakdown, 'Fixed closing fee', 'Total_Fixed_Closing_Fee')
     df_pick = calculate_fee_total(df_charge_breakdown, 'Pick & Pack Fee', 'Total_FBA_Pick_Pack_Fee')
     df_weight = calculate_fee_total(df_charge_breakdown, 'Weight Handling Fee', 'Total_FBA_Weight_Handling_Fee')
     df_tech = calculate_fee_total(df_charge_breakdown, 'Technology Fee', 'Total_Technology_Fee')
     
-    # 3. Total Tax/TDS/TCS Components
+    # Tax/TDS/TCS Components
     tax_descriptions = ['TCS', 'TDS', 'Tax']
     df_tax_summary = calculate_fee_total(df_charge_breakdown, '|'.join(tax_descriptions), 'Total_Tax_TCS_TDS')
 
 
-    # --- FINAL FINANCIAL MASTER MERGE (Net Payment + Fees Bifurcation + Tax) ---
-    
-    # Merge individual fees and tax onto the Net Payment master
+    # --- FINAL FINANCIAL MASTER MERGE ---
     for df in [df_comm, df_fixed, df_pick, df_weight, df_tech, df_tax_summary]: 
         df_financial_master = pd.merge(df_financial_master, df, on='OrderID', how='left').fillna(0)
     
-    # Calculate the old Total_Fees for KPI card consistency
     df_financial_master['Total_Fees_KPI'] = (
         df_financial_master['Total_Commission_Fee'] +
         df_financial_master['Total_Fixed_Closing_Fee'] +
@@ -106,7 +134,7 @@ def process_mtr_files(uploaded_mtr_files):
     for file in uploaded_mtr_files:
         try:
             df_temp = pd.read_csv(file) 
-            df_temp = df_temp.loc[:, ~df_temp.columns.str.contains('^Unnamed')] # Clean Unnamed columns
+            df_temp = df_temp.loc[:, ~df_temp.columns.str.contains('^Unnamed')]
             
             all_mtr_data.append(df_temp)
         except Exception as e:
@@ -115,36 +143,32 @@ def process_mtr_files(uploaded_mtr_files):
         
     df_mtr_raw = pd.concat(all_mtr_data, ignore_index=True)
     
-    # Rename for consistency
     df_mtr_raw.rename(columns={'Order Id': 'OrderID', 'Invoice Amount': 'MTR Invoice Amount'}, inplace=True)
     
-    # Select only the columns required by the user (MTR Table Update requirement)
     required_mtr_cols = [
         'Invoice Number', 'Invoice Date', 'Transaction Type', 'OrderID', 
         'Quantity', 'Sku', 'Ship From City', 'Ship To City', 'Ship To State', 
         'MTR Invoice Amount'
     ]
     
-    # Ensure all required columns exist before copying
     for col in required_mtr_cols:
         if col not in df_mtr_raw.columns:
-            # If a column is missing (e.g., Sku), create it with empty values to prevent KeyError
             df_mtr_raw[col] = ''
     
     df_logistics_master = df_mtr_raw[required_mtr_cols].copy()
     
-    # Cleaning
     df_logistics_master['OrderID'] = df_logistics_master['OrderID'].astype(str)
     df_logistics_master['MTR Invoice Amount'] = pd.to_numeric(df_logistics_master['MTR Invoice Amount'], errors='coerce').fillna(0)
+    df_logistics_master['Sku'] = df_logistics_master['Sku'].astype(str) # Ensure SKU is string for merging
     
     return df_logistics_master
 
 
 @st.cache_data(show_spinner="Merging data and finalizing calculations...")
-def create_final_reconciliation_df(df_financial_master, df_logistics_master):
-    """Merges detailed MTR data with Payment Net Sale Value, Fees, and Tax/TCS."""
+def create_final_reconciliation_df(df_financial_master, df_logistics_master, df_cost_master):
+    """Merges detailed MTR data with Payment Net Sale Value, Fees, Tax/TCS, and Product Cost."""
     
-    # Perform Left Merge: MTR data is the primary base, Payment data is fetched
+    # 1. Merge MTR data with Payment classification
     df_final = pd.merge(
         df_logistics_master, 
         df_financial_master, 
@@ -152,37 +176,65 @@ def create_final_reconciliation_df(df_financial_master, df_logistics_master):
         how='left'
     ).fillna(0)
     
-    # Rename Net Payment column for clarity on screen
     df_final.rename(columns={'Net_Payment_Fetched': 'Net Payment'}, inplace=True)
     
+    # 2. Merge Product Cost data using SKU
+    if not df_cost_master.empty:
+        df_final = pd.merge(
+            df_final,
+            df_cost_master,
+            on='Sku', # Merge on Item SKU
+            how='left'
+        ).fillna({'Product Cost': 0})
+        
+        # 3. Calculate Product Profit/Loss
+        df_final['Product Profit/Loss'] = (
+            df_final['Net Payment'] - 
+            df_final['Total_Fees_KPI'] - 
+            df_final['MTR Invoice Amount'] -
+            df_final['Product Cost']
+        )
+    else:
+        # Add placeholder if cost sheet is not uploaded
+        df_final['Product Cost'] = 0.00
+        df_final['Product Profit/Loss'] = 0.00 # Placeholder calculation
+
     return df_final
-
-
-# --- EXPORT FUNCTION (Single Sheet Only) ---
-@st.cache_data
-def convert_to_excel(df_reconciliation): # Removed df_payment_raw_breakdown
-    """Creates a single-sheet Excel file for export."""
-    
-    output = io.BytesIO()
-    with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
-        df_reconciliation.to_excel(writer, sheet_name='Reconciliation Summary', index=False)
-    
-    return output.getvalue()
 
 
 # --- 2. File Upload Section ---
 
 with st.sidebar:
     st.header("Upload Raw Data Files")
+    
+    # NEW: Cost Sheet Template and Upload
+    st.subheader("Cost Sheet (Optional)")
+    
+    excel_template = create_cost_sheet_template()
+    st.download_button(
+        label="Download Cost Template 📥",
+        data=excel_template,
+        file_name='cost_sheet_template.xlsx',
+        mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    )
+    
+    cost_file = st.file_uploader(
+        "1. Upload Product Cost Sheet (.xlsx)", 
+        type=['xlsx'],
+    )
+    
+    st.markdown("---")
 
+    st.subheader("Amazon Reports (Mandatory)")
+    
     payment_files = st.file_uploader(
-        "1. Upload ALL Payment Reports (.txt)", 
+        "2. Upload ALL Payment Reports (.txt)", 
         type=['txt'], 
         accept_multiple_files=True
     )
 
     mtr_files = st.file_uploader(
-        "2. Upload ALL MTR Reports (.csv)", 
+        "3. Upload ALL MTR Reports (.csv)", 
         type=['csv'], 
         accept_multiple_files=True
     )
@@ -196,31 +248,42 @@ if payment_files and mtr_files:
     df_financial_master, df_payment_raw_breakdown = process_payment_files(payment_files)
     df_logistics_master = process_mtr_files(mtr_files)
 
+    # Process Cost Sheet (only if uploaded)
+    if cost_file:
+        df_cost_master = process_cost_sheet(cost_file)
+    else:
+        df_cost_master = pd.DataFrame()
+
     # Check for errors in file processing before continuing
     if df_financial_master.empty or df_logistics_master.empty:
         st.error("Data processing failed. Please check file formatting or look for error messages above.")
         st.stop()
     
     # Create Final Reconciliation DF
-    df_reconciliation = create_final_reconciliation_df(df_financial_master, df_logistics_master)
+    df_reconciliation = create_final_reconciliation_df(df_financial_master, df_logistics_master, df_cost_master)
     
     
     # --- Dashboard Display ---
     
-    # KPI Cards (Key Metrics) - Use Total_Fees_KPI for the sum
-    total_orders = df_reconciliation.shape[0]
+    # KPI Cards (Key Metrics)
+    total_items = df_reconciliation.shape[0]
     total_mtr_billed = df_reconciliation['MTR Invoice Amount'].sum()
     total_payment_fetched = df_reconciliation['Net Payment'].sum()
-    total_fees = df_reconciliation['Total_Fees_KPI'].sum() # Updated to use the new total column
+    total_fees = df_reconciliation['Total_Fees_KPI'].sum()
     total_tax = df_reconciliation['Total_Tax_TCS_TDS'].sum()
+    total_product_cost = df_reconciliation['Product Cost'].sum()
+    total_profit = df_reconciliation['Product Profit/Loss'].sum()
 
     st.subheader("Key Business Metrics (Based on Item Reconciliation)")
-    col_kpi1, col_kpi2, col_kpi3, col_kpi4, col_kpi5 = st.columns(5)
-    col_kpi1.metric("Total Reconciled Items", f"{total_orders:,}")
-    col_kpi2.metric("Total MTR Invoiced", f"INR {total_mtr_billed:,.2f}")
-    col_kpi3.metric("Total Net Payment", f"INR {total_payment_fetched:,.2f}")
+    col_kpi1, col_kpi2, col_kpi3, col_kpi4, col_kpi5, col_kpi6 = st.columns(6)
+    
+    col_kpi1.metric("Total Items", f"{total_items:,}")
+    col_kpi2.metric("Total Net Payment", f"INR {total_payment_fetched:,.2f}")
+    col_kpi3.metric("Total MTR Invoiced", f"INR {total_mtr_billed:,.2f}")
     col_kpi4.metric("Total Amazon Fees", f"INR {total_fees:,.2f}")
-    col_kpi5.metric("Total Tax/TCS/TDS", f"INR {total_tax:,.2f}")
+    col_kpi5.metric("Total Product Cost", f"INR {total_product_cost:,.2f}")
+    col_kpi6.metric("TOTAL PROFIT/LOSS", f"INR {total_profit:,.2f}", 
+                    delta=f"Tax/TCS: INR {total_tax:,.2f}")
     
     st.markdown("---")
 
@@ -242,14 +305,14 @@ if payment_files and mtr_files:
 
     # --- EXPORT SECTION ---
     st.header("2. Download Full Reconciliation Report")
-    st.info("The Excel file will contain a single sheet with Item Details and all Classified Charges.")
+    st.info("The Excel file will contain a single sheet with Item Details, Classified Charges, and Profit Calculation.")
 
-    excel_data = convert_to_excel(df_reconciliation) # Updated function call
+    excel_data = convert_to_excel(df_reconciliation) 
     
     st.download_button(
         label="Download Full Excel Report (Reconciliation Summary)",
         data=excel_data,
-        file_name='amazon_reconciliation_summary.xlsx', # Renamed file for clarity
+        file_name='amazon_reconciliation_summary.xlsx', 
         mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
     )
     
