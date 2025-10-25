@@ -17,7 +17,7 @@ def process_payment_files(uploaded_payment_files):
     
     all_payment_data = []
     
-    # Define Column Names manually (based on the structure of your uploaded files)
+    # Define Column Names (based on the common 24 columns)
     cols = ['settlement-id', 'settlement-start-date', 'settlement-end-date', 'deposit-date', 
             'total-amount', 'currency', 'transaction-type', 'order-id', 'merchant-order-id', 
             'adjustment-id', 'shipment-id', 'marketplace-name', 'amount-type', 
@@ -27,29 +27,45 @@ def process_payment_files(uploaded_payment_files):
 
     for file in uploaded_payment_files:
         try:
-            # FIX: Use header=1 and names=cols to skip the primary header row 
-            # and force column names, preventing header data from merging into column 0.
+            # FIX: Use header=1 and skipinitialspace=True. 
+            # We don't use 'names=cols' directly here because of varying column counts.
             df_temp = pd.read_csv(io.StringIO(file.getvalue().decode("latin-1")), 
                                   sep='\t', 
                                   skipinitialspace=True,
-                                  header=1, 
-                                  names=cols) 
+                                  header=1,
+                                  dtype=str) # Read everything as string first
+            
+            # FIX: Rename the known column 'order-id' before checking
+            df_temp.rename(columns={df_temp.columns[7]: 'order-id', df_temp.columns[0]: 'settlement-id'}, inplace=True)
+            
+            # If the number of columns is not 24, we need to handle the merge manually
+            if len(df_temp.columns) > 24:
+                 # Drop the last few unexpected columns to match the standard
+                 df_temp = df_temp.iloc[:, :24]
+                 df_temp.columns = cols # Apply standard names to the trimmed dataframe
+            elif len(df_temp.columns) == 24:
+                 df_temp.columns = cols
+            else:
+                 # If fewer than 24, there's a serious problem, stop processing this file.
+                 st.warning(f"File {file.name} has unexpected number of columns ({len(df_temp.columns)}). Skipping.")
+                 continue
+
             all_payment_data.append(df_temp)
         except Exception as e:
             st.error(f"Error reading {file.name}: {e}")
             return pd.DataFrame(), pd.DataFrame()
     
+    # Rest of the concatenation and processing logic remains the same (and is now robust)
     df_payment_raw = pd.concat(all_payment_data, ignore_index=True)
     
+    # ... (Rest of the cleaning and merging logic is the same) ...
+
     # Cleaning: Remove summary rows and convert amount to numeric
-    # Dropping rows where 'order-id' is NaN (these are settlement summary rows)
     df_payment_cleaned = df_payment_raw.dropna(subset=['order-id']).copy()
     
-    # FIX: Ensure OrderID is explicitly a string to avoid int conversion errors
     df_payment_cleaned.rename(columns={'order-id': 'OrderID'}, inplace=True)
     df_payment_cleaned['OrderID'] = df_payment_cleaned['OrderID'].astype(str)
     
-    # Convert 'amount' to numeric, replacing errors (like stray text) with 0
     df_payment_cleaned['amount'] = pd.to_numeric(df_payment_cleaned['amount'], errors='coerce').fillna(0)
     
     # Create Raw Payment Data for detailed breakdown view
@@ -95,6 +111,10 @@ def process_mtr_files(uploaded_mtr_files):
     for file in uploaded_mtr_files:
         try:
             df_temp = pd.read_csv(file) 
+            
+            # FIX: Clean up Unnamed columns which might cause issues during concatenation
+            df_temp = df_temp.loc[:, ~df_temp.columns.str.contains('^Unnamed')]
+            
             all_mtr_data.append(df_temp)
         except Exception as e:
             st.error(f"Error reading {file.name}: {e}")
@@ -138,6 +158,7 @@ def create_final_reconciliation_df(df_financial_master, df_logistics_master):
 def convert_to_excel(df_reconciliation, df_payment_raw_breakdown):
     """Creates a multi-sheet Excel file for export."""
     
+    # Prepare data for detailed breakdown sheet
     df_breakdown_export = df_payment_raw_breakdown[[
         'OrderID', 'transaction-type', 'amount-type', 
         'amount-description', 'amount', 'posted-date', 
@@ -180,7 +201,6 @@ if payment_files and mtr_files:
 
     # Check for errors in file processing before continuing
     if df_financial_master.empty or df_logistics_master.empty:
-        # Error message is already displayed inside the function
         st.stop()
     
     # Create Final Reconciliation DF
