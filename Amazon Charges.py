@@ -13,39 +13,52 @@ st.markdown("---")
 
 @st.cache_data(show_spinner="Processing Payment Files and Creating Financial Master...")
 def process_payment_files(uploaded_payment_files):
-    """Reads all uploaded TXT payment files, combines them, and creates two outputs:
-    1. df_financial_master: A summary of Principal and Fees per OrderID (FIXED LOGIC).
-    2. df_charge_breakdown: The raw data for detailed charge view (for export)."""
+    """Reads all uploaded TXT payment files, combines them, and creates two outputs."""
     
     all_payment_data = []
     
-    # Loop through all uploaded TXT files
+    # Define Column Names manually (based on the structure of your uploaded files)
+    cols = ['settlement-id', 'settlement-start-date', 'settlement-end-date', 'deposit-date', 
+            'total-amount', 'currency', 'transaction-type', 'order-id', 'merchant-order-id', 
+            'adjustment-id', 'shipment-id', 'marketplace-name', 'amount-type', 
+            'amount-description', 'amount', 'fulfillment-id', 'posted-date', 
+            'posted-date-time', 'order-item-code', 'merchant-order-item-id', 
+            'merchant-adjustment-item-id', 'sku', 'quantity-purchased', 'promotion-id']
+
     for file in uploaded_payment_files:
         try:
-            # Use sep='\t' for TXT files
-            df_temp = pd.read_csv(io.StringIO(file.getvalue().decode("latin-1")), sep='\t', skipinitialspace=True)
+            # FIX: Use header=1 and names=cols to skip the primary header row 
+            # and force column names, preventing header data from merging into column 0.
+            df_temp = pd.read_csv(io.StringIO(file.getvalue().decode("latin-1")), 
+                                  sep='\t', 
+                                  skipinitialspace=True,
+                                  header=1, 
+                                  names=cols) 
             all_payment_data.append(df_temp)
         except Exception as e:
             st.error(f"Error reading {file.name}: {e}")
-            return pd.DataFrame(), pd.DataFrame() # Return empty on error
+            return pd.DataFrame(), pd.DataFrame()
     
     df_payment_raw = pd.concat(all_payment_data, ignore_index=True)
     
     # Cleaning: Remove summary rows and convert amount to numeric
+    # Dropping rows where 'order-id' is NaN (these are settlement summary rows)
     df_payment_cleaned = df_payment_raw.dropna(subset=['order-id']).copy()
-    df_payment_cleaned['amount'] = pd.to_numeric(df_payment_cleaned['amount'], errors='coerce').fillna(0)
+    
+    # FIX: Ensure OrderID is explicitly a string to avoid int conversion errors
     df_payment_cleaned.rename(columns={'order-id': 'OrderID'}, inplace=True)
+    df_payment_cleaned['OrderID'] = df_payment_cleaned['OrderID'].astype(str)
+    
+    # Convert 'amount' to numeric, replacing errors (like stray text) with 0
+    df_payment_cleaned['amount'] = pd.to_numeric(df_payment_cleaned['amount'], errors='coerce').fillna(0)
     
     # Create Raw Payment Data for detailed breakdown view
     charge_breakdown_cols = ['OrderID', 'transaction-type', 'marketplace-name', 'amount-type', 'amount-description', 'amount', 'posted-date', 'settlement-id']
     df_charge_breakdown = df_payment_cleaned[charge_breakdown_cols]
     
     # --- PIVOTING: Create Financial Master Summary ---
-    
-    # 1. Total Principal (Revenue)
     principal_df = df_charge_breakdown[df_charge_breakdown['amount-description'] == 'Principal'].groupby('OrderID')['amount'].sum().reset_index(name='Total_Principal')
     
-    # 2. Total Amazon Fees (Cost)
     fee_descriptions = [
         'FBA Pick & Pack Fee', 'FBA Weight Handling Fee', 'Commission', 
         'Fixed closing fee', 'Technology Fee', 'Refund commission',
@@ -60,16 +73,13 @@ def process_payment_files(uploaded_payment_files):
     fees_summary_df = df_fees.groupby('OrderID')['amount'].sum().reset_index(name='Total_Amazon_Fees')
     fees_summary_df['Total_Amazon_Fees'] = fees_summary_df['Total_Amazon_Fees'].abs()
     
-    # --- FIX FOR VALUE ERROR ---
-    # 1. Get a unique list of all OrderIDs involved (Robustness)
+    # --- Robust Merging Logic (Fixes Ambiguous Series Error) ---
     all_order_ids = pd.concat([principal_df['OrderID'], fees_summary_df['OrderID']]).unique()
     df_financial_master = pd.DataFrame(all_order_ids, columns=['OrderID'])
     
-    # 2. Left Merge Principal and Fees onto the Master OrderID list
     df_financial_master = pd.merge(df_financial_master, principal_df, on='OrderID', how='left').fillna({'Total_Principal': 0})
     df_financial_master = pd.merge(df_financial_master, fees_summary_df, on='OrderID', how='left').fillna({'Total_Amazon_Fees': 0})
     
-    # Ensure columns are numeric
     df_financial_master['Total_Principal'] = pd.to_numeric(df_financial_master['Total_Principal'])
     df_financial_master['Total_Amazon_Fees'] = pd.to_numeric(df_financial_master['Total_Amazon_Fees'])
 
@@ -92,6 +102,7 @@ def process_mtr_files(uploaded_mtr_files):
         
     df_mtr_raw = pd.concat(all_mtr_data, ignore_index=True)
     df_mtr_raw.rename(columns={'Order Id': 'OrderID', 'Invoice Amount': 'MTR Invoice Amount'}, inplace=True)
+    df_mtr_raw['OrderID'] = df_mtr_raw['OrderID'].astype(str)
     df_mtr_raw['MTR Invoice Amount'] = pd.to_numeric(df_mtr_raw['MTR Invoice Amount'], errors='coerce').fillna(0)
     
     df_logistics_master = df_mtr_raw.groupby('OrderID')['MTR Invoice Amount'].sum().reset_index(name='Total_MTR_Billed')
@@ -127,7 +138,6 @@ def create_final_reconciliation_df(df_financial_master, df_logistics_master):
 def convert_to_excel(df_reconciliation, df_payment_raw_breakdown):
     """Creates a multi-sheet Excel file for export."""
     
-    # Prepare Detailed Breakdown Data for Export
     df_breakdown_export = df_payment_raw_breakdown[[
         'OrderID', 'transaction-type', 'amount-type', 
         'amount-description', 'amount', 'posted-date', 
@@ -170,7 +180,7 @@ if payment_files and mtr_files:
 
     # Check for errors in file processing before continuing
     if df_financial_master.empty or df_logistics_master.empty:
-        st.error("Data processing failed for one or more files. Please check file content and try again.")
+        # Error message is already displayed inside the function
         st.stop()
     
     # Create Final Reconciliation DF
@@ -221,7 +231,7 @@ if payment_files and mtr_files:
     st.download_button(
         label="Download Full Excel Report (Summary + Breakdown)",
         data=excel_data,
-        file_name='full_amazon_reconciliation_report.xlsx', # Change extension to xlsx
+        file_name='full_amazon_reconciliation_report.xlsx',
         mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
     )
     
