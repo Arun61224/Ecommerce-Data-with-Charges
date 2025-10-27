@@ -53,13 +53,12 @@ def convert_to_excel(df):
         'Total_Fixed_Closing_Fee', 'Total_FBA_Pick_Pack_Fee',
         'Total_FBA_Weight_Handling_Fee', 'Total_Technology_Fee',
         'Total_Fees_KPI', 'Total_Tax_TCS_TDS', 'Product Cost',
-        'Product Profit/Loss', 'Quantity' # Added Quantity for safety, though likely integer
+        'Product Profit/Loss', 'Quantity'
     ]
     for col in numeric_cols:
         if col in df_excel.columns:
-            # Convert to numeric, coercing errors, fill NaNs, then round
              df_excel[col] = pd.to_numeric(df_excel[col], errors='coerce').fillna(0)
-             if col != 'Quantity': # Don't round quantity unless it has decimals
+             if col != 'Quantity':
                   df_excel[col] = df_excel[col].round(2)
 
 
@@ -71,15 +70,12 @@ def convert_to_excel(df):
 def calculate_fee_total(df, keyword, name):
     """Calculates the absolute total amount for specific fee/tax keywords."""
     if 'amount-description' not in df.columns:
-        # Return an empty DataFrame structured correctly if the key column is missing
         return pd.DataFrame({'OrderID': pd.Series(dtype='str'), name: pd.Series(dtype='float')})
 
-    # Ensure amount-description is string and handle NaNs before filtering
     df_filtered = df.dropna(subset=['amount-description'])
     df_fee = df_filtered[df_filtered['amount-description'].astype(str).str.contains(keyword, case=False, na=False)]
 
     if df_fee.empty:
-         # Return an empty DataFrame structured correctly if no matches
          return pd.DataFrame({'OrderID': pd.Series(dtype='str'), name: pd.Series(dtype='float')})
 
 
@@ -148,8 +144,6 @@ def process_payment_files(uploaded_payment_files):
                     missing_cols = [col for col in required_cols_lower if col not in chunk.columns]
                     if missing_cols:
                         st.error(f"Error in {file.name}: The file is missing essential columns: {', '.join(missing_cols)}. Please check your file's header row for typos.")
-                        # Stop processing this file, maybe continue with others?
-                        # For now, let's stop entirely if any file is bad.
                         return pd.DataFrame(), pd.DataFrame()
                     first_chunk = False
 
@@ -157,22 +151,20 @@ def process_payment_files(uploaded_payment_files):
                      chunk.dropna(subset=['order-id'], inplace=True)
                 else:
                      st.warning(f"Skipping part of {file.name} because 'order-id' column is missing in this chunk.")
-                     del chunk # Delete chunk explicitly
-                     continue # Skip to next chunk
+                     del chunk
+                     continue
 
 
-                # Ensure required columns are still present after potential drops/column issues
                 if all(col in chunk.columns for col in required_cols_lower):
                      chunk_small = chunk[required_cols_lower].copy()
                      all_payment_data.append(chunk_small)
                 else:
                     st.warning(f"Skipping chunk in {file.name} due to missing required columns after checks.")
 
-                del chunk # Delete chunk explicitly
+                del chunk
 
         except Exception as e:
             st.error(f"Error reading or processing chunks in {file.name} (Payment TXT): {e}")
-            # Stop processing entirely if a file error occurs
             return pd.DataFrame(), pd.DataFrame()
 
     if not all_payment_data:
@@ -193,13 +185,11 @@ def process_payment_files(uploaded_payment_files):
     df_charge_breakdown['OrderID'] = df_charge_breakdown['OrderID'].astype(str)
     df_charge_breakdown['amount'] = pd.to_numeric(df_charge_breakdown['amount'], errors='coerce').fillna(0)
 
-    # Group by OrderID to get the base Net_Payment_Fetched
     df_financial_master = df_charge_breakdown.groupby('OrderID')['amount'].sum().reset_index(name='Net_Payment_Fetched')
 
     # --- Fee Calculation ---
     orders_df = pd.DataFrame({'OrderID': df_charge_breakdown['OrderID'].unique()}) # Get unique OrderIDs
 
-    # Calculate each fee type
     df_comm = calculate_fee_total(df_charge_breakdown, 'Commission', 'Total_Commission_Fee')
     df_fixed = calculate_fee_total(df_charge_breakdown, 'Fixed closing fee', 'Total_Fixed_Closing_Fee')
     df_pick = calculate_fee_total(df_charge_breakdown, 'Pick & Pack Fee', 'Total_FBA_Pick_Pack_Fee')
@@ -209,29 +199,21 @@ def process_payment_files(uploaded_payment_files):
     tax_descriptions = ['TCS', 'TDS', 'Tax']
     df_tax_summary = calculate_fee_total(df_charge_breakdown, '|'.join(tax_descriptions), 'Total_Tax_TCS_TDS')
 
-    # Merge fees onto the base df_financial_master safely
     for df_fee in [df_comm, df_fixed, df_pick, df_weight, df_tech, df_tax_summary]:
-         # Check if the fee DataFrame is not empty and contains 'OrderID'
          if not df_fee.empty and 'OrderID' in df_fee.columns:
              df_financial_master = pd.merge(df_financial_master, df_fee, on='OrderID', how='left')
          else:
-             # If df_fee is empty or missing OrderID, find the expected column name and add it with 0s
-             # This assumes the fee column is the second column if df_fee wasn't empty
-             if not df_fee.empty and len(df_fee.columns) > 1:
-                  fee_col_name = df_fee.columns[1]
-                  if fee_col_name not in df_financial_master.columns:
-                       df_financial_master[fee_col_name] = 0.0
-             # If df_fee was completely empty, we need to know the expected column name to add it
-             # This part requires knowing the column names beforehand if calculate_fee_total returns truly empty
-             elif df_fee is df_comm and 'Total_Commission_Fee' not in df_financial_master.columns: df_financial_master['Total_Commission_Fee']=0.0
+             # Add missing columns derived from potentially empty fee dataframes
+             if df_fee is df_comm and 'Total_Commission_Fee' not in df_financial_master.columns: df_financial_master['Total_Commission_Fee']=0.0
              elif df_fee is df_fixed and 'Total_Fixed_Closing_Fee' not in df_financial_master.columns: df_financial_master['Total_Fixed_Closing_Fee']=0.0
-             # ... and so on for other fee types ...
+             elif df_fee is df_pick and 'Total_FBA_Pick_Pack_Fee' not in df_financial_master.columns: df_financial_master['Total_FBA_Pick_Pack_Fee']=0.0
+             elif df_fee is df_weight and 'Total_FBA_Weight_Handling_Fee' not in df_financial_master.columns: df_financial_master['Total_FBA_Weight_Handling_Fee']=0.0
+             elif df_fee is df_tech and 'Total_Technology_Fee' not in df_financial_master.columns: df_financial_master['Total_Technology_Fee']=0.0
+             elif df_fee is df_tax_summary and 'Total_Tax_TCS_TDS' not in df_financial_master.columns: df_financial_master['Total_Tax_TCS_TDS']=0.0
 
 
-    # Fill NaNs resulting from merges with 0
     df_financial_master.fillna(0, inplace=True)
 
-    # Calculate Total_Fees_KPI using only columns confirmed to exist
     fee_kpi_cols = [
         'Total_Commission_Fee', 'Total_Fixed_Closing_Fee',
         'Total_FBA_Weight_Handling_Fee', 'Total_Technology_Fee'
@@ -240,7 +222,6 @@ def process_payment_files(uploaded_payment_files):
         [col for col in fee_kpi_cols if col in df_financial_master.columns]
     ].sum(axis=1)
 
-    # Ensure all expected fee columns exist, adding them with 0 if necessary
     all_expected_fee_cols = fee_kpi_cols + ['Total_FBA_Pick_Pack_Fee', 'Total_Tax_TCS_TDS']
     for col in all_expected_fee_cols:
          if col not in df_financial_master.columns:
@@ -279,7 +260,6 @@ def process_mtr_files(uploaded_mtr_files):
 
         except Exception as e:
             st.error(f"Error reading {file.name} (MTR CSV): {e}")
-            # Optionally continue to next file
 
     if not all_mtr_data:
         st.error("No valid MTR data could be processed from the CSV files.")
@@ -299,22 +279,18 @@ def process_mtr_files(uploaded_mtr_files):
         'MTR Invoice Amount'
     ]
 
-    # Add missing columns safely
     for col in final_cols:
         if col not in df_mtr_raw.columns:
-            df_mtr_raw[col] = '' # Initialize missing columns
+            df_mtr_raw[col] = ''
 
-    # Ensure final selection uses only columns that now exist
     final_cols_present = [col for col in final_cols if col in df_mtr_raw.columns]
     df_logistics_master = df_mtr_raw[final_cols_present].copy()
 
-     # Add any remaining missing columns if somehow missed (fallback)
     for col in final_cols:
          if col not in df_logistics_master.columns:
               df_logistics_master[col] = ''
 
 
-    # Convert types carefully, handling potential errors
     df_logistics_master['OrderID'] = df_logistics_master['OrderID'].astype(str)
     df_logistics_master['MTR Invoice Amount'] = pd.to_numeric(df_logistics_master['MTR Invoice Amount'], errors='coerce').fillna(0)
     df_logistics_master['Sku'] = df_logistics_master['Sku'].astype(str)
@@ -347,28 +323,23 @@ def create_final_reconciliation_df(df_financial_master, df_logistics_master, df_
         st.error(f"Error during main merge: {merge_err}")
         return pd.DataFrame()
 
-    # Ensure key numeric columns exist and are numeric before proceeding
     numeric_cols_needed = ['MTR Invoice Amount', 'Net_Payment_Fetched', 'Quantity']
     for col in numeric_cols_needed:
-         if col not in df_final.columns:
-               df_final[col] = 0 # Add missing column with 0
+         if col not in df_final.columns: df_final[col] = 0
          df_final[col] = pd.to_numeric(df_final[col], errors='coerce').fillna(0)
 
 
-    # Calculate proportion safely
     df_final['Total_MTR_per_Order'] = df_final.groupby('OrderID')['MTR Invoice Amount'].transform('sum')
     df_final['Item_Count_per_Order'] = df_final.groupby('OrderID')['OrderID'].transform('count')
     df_final['Proportion'] = np.where(
-        (df_final['Total_MTR_per_Order'] != 0), # Check explicitly for non-zero
+        (df_final['Total_MTR_per_Order'] != 0),
         df_final['MTR Invoice Amount'] / df_final['Total_MTR_per_Order'],
         np.where(df_final['Item_Count_per_Order'] > 0, 1 / df_final['Item_Count_per_Order'], 0)
     )
 
     financial_cols_present = [col for col in df_financial_master.columns if col != 'OrderID' and col in df_final.columns]
 
-    # Apply proportion safely
     for col in financial_cols_present:
-        # Ensure column is numeric before multiplying
         df_final[col] = pd.to_numeric(df_final[col], errors='coerce').fillna(0) * df_final['Proportion']
 
 
@@ -377,26 +348,21 @@ def create_final_reconciliation_df(df_financial_master, df_logistics_master, df_
     elif 'Net Payment' not in df_final.columns:
          df_final['Net Payment'] = 0.0
 
-    # Merge Product Cost
     if not df_cost_master.empty and 'Sku' in df_final.columns and 'Sku' in df_cost_master.columns:
         try:
              df_final = pd.merge(df_final, df_cost_master, on='Sku', how='left')
-             # Ensure 'Product Cost' column exists after merge, default to 0 if not
-             if 'Product Cost' not in df_final.columns:
-                  df_final['Product Cost'] = 0.0
+             if 'Product Cost' not in df_final.columns: df_final['Product Cost'] = 0.0
         except Exception as cost_merge_err:
              st.warning(f"Could not merge cost data: {cost_merge_err}. Using 0 for Product Cost.")
              if 'Product Cost' not in df_final.columns: df_final['Product Cost'] = 0.0
 
-    elif 'Product Cost' not in df_final.columns: # If cost sheet was empty or Sku missing
+    elif 'Product Cost' not in df_final.columns:
           df_final['Product Cost'] = 0.0
 
-    # Fill NaNs AFTER all merges and ensure Product Cost is numeric
     df_final.fillna(0, inplace=True)
     df_final['Product Cost'] = pd.to_numeric(df_final['Product Cost'], errors='coerce').fillna(0)
 
 
-    # Set Product Cost to 0 for refund/replacement/cancel types
     refund_types_lower = ['cancel refund', 'freereplacement', 'refund', 'cancel']
     if 'Transaction Type' in df_final.columns:
         standardized_transaction_type = df_final['Transaction Type'].astype(str).str.strip().str.lower()
@@ -406,7 +372,6 @@ def create_final_reconciliation_df(df_financial_master, df_logistics_master, df_
             df_final['Product Cost']
         )
 
-    # Calculate Profit/Loss safely
     df_final['Net Payment'] = pd.to_numeric(df_final['Net Payment'], errors='coerce').fillna(0)
     df_final['Quantity'] = pd.to_numeric(df_final['Quantity'], errors='coerce').fillna(1).astype(int)
     df_final['Product Profit/Loss'] = (
@@ -461,17 +426,15 @@ with st.sidebar:
 
 if payment_zip_files and mtr_files:
 
-    df_cost_master = pd.DataFrame() # Initialize empty
+    df_cost_master = pd.DataFrame()
     df_financial_master = pd.DataFrame()
     df_logistics_master = pd.DataFrame()
     df_reconciliation = pd.DataFrame()
 
-    # 1. Process Cost Sheet (if uploaded) - Uncached
     if cost_file:
          with st.spinner("Processing Cost Sheet..."):
               df_cost_master = process_cost_sheet(cost_file)
 
-    # 2. Process Payment ZIP (uncached)
     all_payment_file_objects = []
     with st.spinner("Unzipping Payment files..."):
         for zip_file in payment_zip_files:
@@ -482,27 +445,22 @@ if payment_zip_files and mtr_files:
         st.error("ZIP file(s) processed, but no Payment (.txt) files found inside.")
         st.stop()
 
-    # 3. Process files - Call the UNCACHED, memory-efficient functions
     with st.spinner("Processing Payment files... (This may take a while for large files)"):
         df_financial_master, df_payment_raw_breakdown = process_payment_files(all_payment_file_objects)
 
     with st.spinner("Processing MTR files... (This may take a while for large files)"):
         df_logistics_master = process_mtr_files(mtr_files)
 
-    # Check if processing failed before merging
     if df_financial_master.empty or df_logistics_master.empty:
         st.error("Data processing failed. Cannot proceed to merge. Check file formatting or error messages above.")
         st.stop()
 
-    # 4. Create Final Reconciliation DF - This step IS CACHED
-    # Ensure DataFrames are not None before passing
     if df_financial_master is not None and df_logistics_master is not None:
          df_reconciliation = create_final_reconciliation_df(df_financial_master, df_logistics_master, df_cost_master if df_cost_master is not None else pd.DataFrame())
     else:
          st.error("Failed to process input files correctly. Cannot create final report.")
          st.stop()
 
-    # Final check if reconciliation DataFrame is valid
     if df_reconciliation.empty:
          st.error("Failed to create the final reconciliation report. Please review the processing steps and input files.")
          st.stop()
@@ -510,22 +468,17 @@ if payment_zip_files and mtr_files:
 
     # --- Dashboard Display ---
     try:
-        # Ensure columns exist before summing/calculating metrics
         total_items = df_reconciliation.shape[0]
         total_mtr_billed = df_reconciliation['MTR Invoice Amount'].sum() if 'MTR Invoice Amount' in df_reconciliation.columns else 0
         total_payment_fetched = df_reconciliation['Net Payment'].sum() if 'Net Payment' in df_reconciliation.columns else 0
         total_fees = df_reconciliation['Total_Fees_KPI'].sum() if 'Total_Fees_KPI' in df_reconciliation.columns else 0
         total_tax = df_reconciliation['Total_Tax_TCS_TDS'].sum() if 'Total_Tax_TCS_TDS' in df_reconciliation.columns else 0
 
-        # Calculate total product cost safely
         if 'Product Cost' in df_reconciliation.columns and 'Quantity' in df_reconciliation.columns:
-            # Ensure columns are numeric before multiplying
             cost = pd.to_numeric(df_reconciliation['Product Cost'], errors='coerce').fillna(0)
             quantity = pd.to_numeric(df_reconciliation['Quantity'], errors='coerce').fillna(1)
             total_product_cost = (cost * quantity).sum()
-
-        else:
-            total_product_cost = 0
+        else: total_product_cost = 0
 
         total_profit = df_reconciliation['Product Profit/Loss'].sum() if 'Product Profit/Loss' in df_reconciliation.columns else 0
 
@@ -544,13 +497,12 @@ if payment_zip_files and mtr_files:
 
         st.header("1. Item-Level Reconciliation Summary (MTR Details + Classified Charges)")
 
-        # Ensure OrderID exists for sorting/filtering
         if 'OrderID' in df_reconciliation.columns:
             order_id_list = ['All Orders'] + sorted(df_reconciliation['OrderID'].unique().tolist())
             selected_order_id = st.selectbox("👉 Select Order ID to Filter Summary:", order_id_list)
 
             if selected_order_id != 'All Orders':
-                df_display = df_reconciliation[df_reconciliation['OrderID'] == selected_order_id].copy() # Use copy
+                df_display = df_reconciliation[df_reconciliation['OrderID'] == selected_order_id].copy()
             else:
                 df_display = df_reconciliation.sort_values(by='OrderID', ascending=True).copy()
         else:
@@ -558,7 +510,7 @@ if payment_zip_files and mtr_files:
              df_display = df_reconciliation.copy()
 
 
-        # --- FIX: Apply number formatting using column_config ---
+        # --- FIX: Scale down large numbers and apply number formatting ---
         column_config_dict = {}
         numeric_cols_to_format = [
             'MTR Invoice Amount', 'Net Payment', 'Total_Commission_Fee',
@@ -568,10 +520,33 @@ if payment_zip_files and mtr_files:
             'Product Profit/Loss'
         ]
 
-        # Create config dict only for columns that exist in df_display
+        # Define columns that might contain extremely large numbers due to allocation
+        cols_to_scale = [
+             'Total_Commission_Fee', 'Total_Fixed_Closing_Fee', 'Total_FBA_Pick_Pack_Fee',
+            'Total_FBA_Weight_Handling_Fee', 'Total_Technology_Fee', 'Total_Fees_KPI',
+            'Total_Tax_TCS_TDS', 'Net Payment' # Include Net Payment as it's also allocated
+        ]
+
+        # Define a large number threshold and scaling factor
+        large_num_threshold = 1e12 # Example: Numbers larger than a trillion
+        scaling_factor = 1e18 # Example: Divide by 10^18
+
+        # Apply scaling ONLY to df_display for the specified columns
+        for col in cols_to_scale:
+            if col in df_display.columns:
+                # Ensure column is numeric before scaling
+                 df_display[col] = pd.to_numeric(df_display[col], errors='coerce').fillna(0)
+                 # Apply scaling where numbers exceed the threshold
+                 df_display[col] = np.where(
+                     np.abs(df_display[col]) > large_num_threshold,
+                     df_display[col] / scaling_factor,
+                     df_display[col]
+                 )
+
+
+        # Create format config for all numeric columns (including scaled ones)
         for col in numeric_cols_to_format:
             if col in df_display.columns:
-                 # Use NumberColumn with format for 2 decimal places
                  column_config_dict[col] = st.column_config.NumberColumn(format="%.2f")
 
         st.dataframe(
@@ -588,7 +563,7 @@ if payment_zip_files and mtr_files:
         st.header("2. Download Full Reconciliation Report")
         st.info("The Excel file will contain a single sheet with Item Details, Classified Charges, and Profit Calculation.")
 
-        excel_data = convert_to_excel(df_reconciliation)
+        excel_data = convert_to_excel(df_reconciliation) # Use original unscaled data
 
         st.download_button(
             label="Download Full Excel Report (Reconciliation Summary)",
@@ -599,6 +574,7 @@ if payment_zip_files and mtr_files:
 
     except Exception as display_err:
         st.error(f"An error occurred while displaying the dashboard: {display_err}")
+        st.exception(display_err) # Show more details about the display error
 
 
 else:
