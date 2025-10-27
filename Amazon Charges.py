@@ -22,7 +22,6 @@ def create_cost_sheet_template():
     df = pd.DataFrame(template_data)
     
     output = io.BytesIO()
-    # This line needs 'xlsxwriter' library
     with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
         df.to_excel(writer, sheet_name='Cost_Sheet_Template', index=False)
     
@@ -32,7 +31,6 @@ def create_cost_sheet_template():
 def process_cost_sheet(uploaded_file):
     """Reads the uploaded cost sheet and prepares it for merging."""
     try:
-        # This line needs 'openpyxl' library
         df_cost = pd.read_excel(uploaded_file) 
         df_cost.rename(columns={'SKU': 'Sku'}, inplace=True) 
         df_cost['Sku'] = df_cost['Sku'].astype(str)
@@ -69,7 +67,8 @@ def process_payment_zip_file(uploaded_zip_file):
     payment_files = []
 
     try:
-        with zipfile.ZipFile(io.BytesIO(uploaded_zip_file.read()), 'r') as zf:
+        # Use the file object directly with zipfile
+        with zipfile.ZipFile(uploaded_zip_file, 'r') as zf:
             for name in zf.namelist():
                 if name.startswith('__MACOSX/') or name.endswith('/') or name.startswith('.'):
                     continue
@@ -77,7 +76,7 @@ def process_payment_zip_file(uploaded_zip_file):
                 if name.lower().endswith('.txt'):
                     file_content_bytes = zf.read(name)
                     
-                    # FIX for the lambda error: lambda *args
+                    # Create a pseudo-file object that mimics the st.file_uploader object
                     pseudo_file = type('FileUploaderObject', (object,), {
                         'name': name,
                         'getvalue': lambda *args, b=file_content_bytes: b,
@@ -86,10 +85,10 @@ def process_payment_zip_file(uploaded_zip_file):
                     payment_files.append(pseudo_file)
 
     except zipfile.BadZipFile:
-        st.error("Error: The uploaded file is not a valid ZIP file.")
+        st.error(f"Error: The uploaded file {uploaded_zip_file.name} is not a valid ZIP file.")
         return []
     except Exception as e:
-        st.error(f"An unexpected error occurred during unzipping: {e}")
+        st.error(f"An unexpected error occurred during unzipping {uploaded_zip_file.name}: {e}")
         return []
 
     return payment_files # List of pseudo-file objects
@@ -109,6 +108,8 @@ def process_payment_files(uploaded_payment_files):
             'posted-date-time', 'order-item-code', 'merchant-order-item-id', 
             'merchant-adjustment-item-id', 'sku', 'quantity-purchased', 'promotion-id'] 
 
+    required_cols = ['order-id', 'amount-description', 'amount']
+
     for file in uploaded_payment_files:
         try:
             df_temp = pd.read_csv(io.StringIO(file.getvalue().decode("latin-1")), 
@@ -120,7 +121,14 @@ def process_payment_files(uploaded_payment_files):
                 df_temp = df_temp.iloc[:, :len(cols)]
             df_temp.columns = cols 
             
-            all_payment_data.append(df_temp)
+            df_temp.dropna(subset=['order-id'], inplace=True)
+            
+            df_temp_small = df_temp[required_cols].copy()
+            
+            all_payment_data.append(df_temp_small)
+            
+            del df_temp
+            
         except Exception as e:
             st.error(f"Error reading {file.name} (Payment TXT): The file structure is unexpected. Details: {e}")
             return pd.DataFrame(), pd.DataFrame()
@@ -129,20 +137,16 @@ def process_payment_files(uploaded_payment_files):
         st.error("No valid payment data was found in the TXT files.")
         return pd.DataFrame(), pd.DataFrame()
         
-    df_payment_raw = pd.concat(all_payment_data, ignore_index=True)
-    df_payment_cleaned = df_payment_raw.dropna(subset=['order-id']).copy()
+    df_charge_breakdown = pd.concat(all_payment_data, ignore_index=True)
     
-    if df_payment_cleaned.empty:
+    if df_charge_breakdown.empty:
         st.error("Payment files were read, but no valid 'order-id' entries were found.")
         return pd.DataFrame(), pd.DataFrame()
         
-    df_payment_cleaned.rename(columns={'order-id': 'OrderID'}, inplace=True)
-    df_payment_cleaned['OrderID'] = df_payment_cleaned['OrderID'].astype(str)
-    df_payment_cleaned['amount'] = pd.to_numeric(df_payment_cleaned['amount'], errors='coerce').fillna(0)
+    df_charge_breakdown.rename(columns={'order-id': 'OrderID'}, inplace=True)
+    df_charge_breakdown['OrderID'] = df_charge_breakdown['OrderID'].astype(str)
+    df_charge_breakdown['amount'] = pd.to_numeric(df_charge_breakdown['amount'], errors='coerce').fillna(0)
     
-    charge_breakdown_cols = ['OrderID', 'transaction-type', 'marketplace-name', 'amount-type', 'amount-description', 'amount', 'posted-date', 'settlement-id']
-    df_charge_breakdown = df_payment_cleaned[charge_breakdown_cols]
-        
     df_financial_master = df_charge_breakdown.groupby('OrderID')['amount'].sum().reset_index(name='Net_Payment_Fetched')
     
     df_comm = calculate_fee_total(df_charge_breakdown, 'Commission', 'Total_Commission_Fee')
@@ -173,12 +177,23 @@ def process_mtr_files(uploaded_mtr_files):
     
     all_mtr_data = []
     
+    required_mtr_cols = [
+        'Invoice Number', 'Invoice Date', 'Transaction Type', 'Order Id', 
+        'Quantity', 'Sku', 'Ship From City', 'Ship To City', 'Ship To State', 
+        'Invoice Amount'
+    ]
+    
     for file in uploaded_mtr_files:
         try:
             df_temp = pd.read_csv(file) 
             df_temp = df_temp.loc[:, ~df_temp.columns.str.contains('^Unnamed')]
             
-            all_mtr_data.append(df_temp)
+            cols_to_keep = [col for col in required_mtr_cols if col in df_temp.columns]
+            df_temp_small = df_temp[cols_to_keep].copy()
+
+            all_mtr_data.append(df_temp_small)
+            del df_temp
+            
         except Exception as e:
             st.error(f"Error reading {file.name} (MTR CSV): {e}")
             return pd.DataFrame()
@@ -191,17 +206,17 @@ def process_mtr_files(uploaded_mtr_files):
     
     df_mtr_raw.rename(columns={'Order Id': 'OrderID', 'Invoice Amount': 'MTR Invoice Amount'}, inplace=True)
     
-    required_mtr_cols = [
+    final_cols = [
         'Invoice Number', 'Invoice Date', 'Transaction Type', 'OrderID', 
         'Quantity', 'Sku', 'Ship From City', 'Ship To City', 'Ship To State', 
         'MTR Invoice Amount'
     ]
     
-    for col in required_mtr_cols:
+    for col in final_cols:
         if col not in df_mtr_raw.columns:
             df_mtr_raw[col] = ''
     
-    df_logistics_master = df_mtr_raw[required_mtr_cols].copy()
+    df_logistics_master = df_mtr_raw[final_cols].copy()
     
     df_logistics_master['OrderID'] = df_logistics_master['OrderID'].astype(str)
     df_logistics_master['MTR Invoice Amount'] = pd.to_numeric(df_logistics_master['MTR Invoice Amount'], errors='coerce').fillna(0)
@@ -269,9 +284,11 @@ with st.sidebar:
 
     st.subheader("Amazon Reports (Mandatory)")
     
-    payment_zip_file = st.file_uploader(
-        "2. Upload ALL Payment Reports in a **Single Zipped Folder** (.zip)", 
-        type=['zip'], 
+    # MODIFIED: Allow multiple zip files
+    payment_zip_files = st.file_uploader(
+        "2. Upload ALL Payment Reports in **one or more Zipped Folders** (.zip)", 
+        type=['zip'],
+        accept_multiple_files=True # This allows multiple uploads
     )
     
     mtr_files = st.file_uploader(
@@ -284,7 +301,8 @@ with st.sidebar:
 
 # --- 3. Main Logic Execution ---
 
-if payment_zip_file and mtr_files:
+# MODIFIED: Check for payment_zip_files (plural)
+if payment_zip_files and mtr_files:
     
     # 1. Process Cost Sheet (if uploaded) - Uncached
     if cost_file:
@@ -293,16 +311,22 @@ if payment_zip_file and mtr_files:
         df_cost_master = pd.DataFrame()
         
     # 2. Process Payment ZIP (uncached)
+    all_payment_file_objects = [] # Create a list to hold files from all zips
     with st.spinner("Unzipping Payment files..."): 
-        payment_file_objects = process_payment_zip_file(payment_zip_file)
+        for zip_file in payment_zip_files: # Loop through each uploaded zip file
+            payment_file_objects = process_payment_zip_file(zip_file)
+            all_payment_file_objects.extend(payment_file_objects) # Add them to the master list
     
-    if not payment_file_objects:
-        st.error("ZIP file processed, but no Payment (.txt) files found inside. Please check the contents of your ZIP file.")
+    if not all_payment_file_objects: # Check the master list
+        st.error("ZIP file(s) processed, but no Payment (.txt) files found inside.")
         st.stop()
         
     # 3. Process files - Call the UNCACHED functions
-    df_financial_master, df_payment_raw_breakdown = process_payment_files(payment_file_objects)
-    df_logistics_master = process_mtr_files(mtr_files)
+    with st.spinner("Processing Payment files..."):
+        df_financial_master, df_payment_raw_breakdown = process_payment_files(all_payment_file_objects) # Pass the master list
+    
+    with st.spinner("Processing MTR files..."):
+        df_logistics_master = process_mtr_files(mtr_files)
 
     if df_financial_master.empty or df_logistics_master.empty:
         st.error("Data processing failed. Please check file formatting or look for error messages above.")
