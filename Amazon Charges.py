@@ -51,8 +51,16 @@ def convert_to_excel(df):
         df.to_excel(writer, sheet_name='Reconciliation_Summary', index=False)
     return output.getvalue()
 
-# FIX 1: Removed @st.cache_data and modified return value. 
-# Returns a list of hashable tuples: (file_content_string, file_name)
+# NEW GLOBAL HELPER FUNCTION (Moved from inside process_payment_files)
+# This prevents caching conflict errors.
+def calculate_fee_total(df, keyword, name):
+    """Calculates the absolute total amount for specific fee/tax keywords."""
+    df_fee = df[df['amount-description'].str.contains(keyword, case=False, na=False)]
+    df_summary = df_fee.groupby('OrderID')['amount'].sum().reset_index(name=name)
+    df_summary[name] = df_summary[name].abs()
+    return df_summary
+
+# FIX: Removed @st.cache_data and modified return value to hashable format
 def process_payment_zip_file(uploaded_zip_file):
     """
     Reads a single uploaded ZIP file, extracts contents, and returns a list of 
@@ -69,7 +77,7 @@ def process_payment_zip_file(uploaded_zip_file):
 
                 if name.lower().endswith('.txt'):
                     file_content_bytes = zf.read(name)
-                    # Decode to string immediately, which is hashable
+                    # Decode to string immediately
                     file_content_str = file_content_bytes.decode("latin-1")
                     payment_data.append((file_content_str, name))
 
@@ -85,7 +93,6 @@ def process_payment_zip_file(uploaded_zip_file):
 # --- 1. Data Processing Functions ---
 
 @st.cache_data(show_spinner="Processing Payment Files and Creating Financial Master...")
-# FIX 2: Now accepts the list of (content_str, file_name) tuples, which are hashable.
 def process_payment_files(uploaded_payment_data):
     """Reads all payment file contents (passed as strings), creates the financial summary."""
     
@@ -98,7 +105,7 @@ def process_payment_files(uploaded_payment_data):
             'posted-date-time', 'order-item-code', 'merchant-order-item-id', 
             'merchant-adjustment-item-id', 'sku', 'quantity-purchased', 'promotion-id'] 
 
-    # Iterate over the list of (file_content_str, file_name) tuples
+    # uploaded_payment_data is a list of (file_content_str, file_name)
     for file_content_str, file_name in uploaded_payment_data:
         try:
             # Use io.StringIO directly with the content string
@@ -127,11 +134,8 @@ def process_payment_files(uploaded_payment_data):
     df_charge_breakdown = df_payment_cleaned[charge_breakdown_cols]
     
     
-    def calculate_fee_total(df, keyword, name):
-        df_fee = df[df['amount-description'].str.contains(keyword, case=False, na=False)]
-        df_summary = df_fee.groupby('OrderID')['amount'].sum().reset_index(name=name)
-        df_summary[name] = df_summary[name].abs()
-        return df_summary
+    # --- PIVOTING: Calculate CLASSIFIED AMOUNTS per OrderID ---
+    # Using the now global calculate_fee_total function
         
     df_financial_master = df_charge_breakdown.groupby('OrderID')['amount'].sum().reset_index(name='Net_Payment_Fetched')
     
@@ -277,7 +281,6 @@ with st.sidebar:
 if payment_zip_file and mtr_files:
     # 1. Process the ZIP file for Payment reports
     with st.spinner("Unzipping Payment files..."): 
-        # Call the modified function which returns hashable strings/tuples
         payment_data_tuples = process_payment_zip_file(payment_zip_file)
     
     if not payment_data_tuples:
