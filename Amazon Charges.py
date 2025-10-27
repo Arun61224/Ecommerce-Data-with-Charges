@@ -51,8 +51,6 @@ def convert_to_excel(df):
         df.to_excel(writer, sheet_name='Reconciliation_Summary', index=False)
     return output.getvalue()
 
-# NEW GLOBAL HELPER FUNCTION (Moved from inside process_payment_files)
-# This prevents caching conflict errors.
 def calculate_fee_total(df, keyword, name):
     """Calculates the absolute total amount for specific fee/tax keywords."""
     df_fee = df[df['amount-description'].str.contains(keyword, case=False, na=False)]
@@ -60,7 +58,7 @@ def calculate_fee_total(df, keyword, name):
     df_summary[name] = df_summary[name].abs()
     return df_summary
 
-# FIX: Removed @st.cache_data and modified return value to hashable format
+# Uncached helper for ZIP processing
 def process_payment_zip_file(uploaded_zip_file):
     """
     Reads a single uploaded ZIP file, extracts contents, and returns a list of 
@@ -71,15 +69,13 @@ def process_payment_zip_file(uploaded_zip_file):
     try:
         with zipfile.ZipFile(io.BytesIO(uploaded_zip_file.read()), 'r') as zf:
             for name in zf.namelist():
-                # Ignore system files and directories
                 if name.startswith('__MACOSX/') or name.endswith('/') or name.startswith('.'):
                     continue
 
                 if name.lower().endswith('.txt'):
                     file_content_bytes = zf.read(name)
-                    # Decode to string immediately
                     file_content_str = file_content_bytes.decode("latin-1")
-                    payment_data.append((file_content_str, name))
+                    payment_data.append((file_content_str, name)) # (content, name) tuple
 
     except zipfile.BadZipFile:
         st.error("Error: The uploaded file is not a valid ZIP file.")
@@ -105,10 +101,8 @@ def process_payment_files(uploaded_payment_data):
             'posted-date-time', 'order-item-code', 'merchant-order-item-id', 
             'merchant-adjustment-item-id', 'sku', 'quantity-purchased', 'promotion-id'] 
 
-    # uploaded_payment_data is a list of (file_content_str, file_name)
     for file_content_str, file_name in uploaded_payment_data:
         try:
-            # Use io.StringIO directly with the content string
             df_temp = pd.read_csv(io.StringIO(file_content_str), 
                                  sep='\t', 
                                  skipinitialspace=True,
@@ -132,10 +126,6 @@ def process_payment_files(uploaded_payment_data):
     
     charge_breakdown_cols = ['OrderID', 'transaction-type', 'marketplace-name', 'amount-type', 'amount-description', 'amount', 'posted-date', 'settlement-id']
     df_charge_breakdown = df_payment_cleaned[charge_breakdown_cols]
-    
-    
-    # --- PIVOTING: Calculate CLASSIFIED AMOUNTS per OrderID ---
-    # Using the now global calculate_fee_total function
         
     df_financial_master = df_charge_breakdown.groupby('OrderID')['amount'].sum().reset_index(name='Net_Payment_Fetched')
     
@@ -147,7 +137,6 @@ def process_payment_files(uploaded_payment_data):
     
     tax_descriptions = ['TCS', 'TDS', 'Tax']
     df_tax_summary = calculate_fee_total(df_charge_breakdown, '|'.join(tax_descriptions), 'Total_Tax_TCS_TDS')
-
 
     for df in [df_comm, df_fixed, df_pick, df_weight, df_tech, df_tax_summary]: 
         df_financial_master = pd.merge(df_financial_master, df, on='OrderID', how='left').fillna(0)
@@ -162,21 +151,23 @@ def process_payment_files(uploaded_payment_data):
     
     return df_financial_master, df_charge_breakdown 
 
-
+# FIX: MODIFIED THIS FUNCTION
 @st.cache_data(show_spinner="Processing MTR Files and Creating Detailed Logistics Master...")
-def process_mtr_files(uploaded_mtr_files):
-    """Reads all uploaded CSV MTR files and concatenates them, keeping item-level detail."""
+def process_mtr_files(uploaded_mtr_data):
+    """Reads all uploaded CSV MTR files (passed as strings) and concatenates them."""
     
     all_mtr_data = []
     
-    for file in uploaded_mtr_files:
+    # Iterate over the (content_str, file_name) tuples
+    for content_str, file_name in uploaded_mtr_data:
         try:
-            df_temp = pd.read_csv(file) 
+            # Read CSV content from the string
+            df_temp = pd.read_csv(io.StringIO(content_str)) 
             df_temp = df_temp.loc[:, ~df_temp.columns.str.contains('^Unnamed')]
             
             all_mtr_data.append(df_temp)
         except Exception as e:
-            st.error(f"Error reading {file.name} (MTR CSV): {e}")
+            st.error(f"Error reading {file_name} (MTR CSV): {e}")
             return pd.DataFrame()
         
     df_mtr_raw = pd.concat(all_mtr_data, ignore_index=True)
@@ -223,7 +214,6 @@ def create_final_reconciliation_df(df_financial_master, df_logistics_master, df_
             how='left'
         ).fillna({'Product Cost': 0})
         
-        # Calculate Product Profit/Loss
         df_final['Product Profit/Loss'] = (
             df_final['Net Payment'] - 
             df_final['Total_Fees_KPI'] - 
@@ -261,13 +251,11 @@ with st.sidebar:
 
     st.subheader("Amazon Reports (Mandatory)")
     
-    # Payment Files via Single ZIP File Uploader
     payment_zip_file = st.file_uploader(
         "2. Upload ALL Payment Reports in a **Single Zipped Folder** (.zip)", 
         type=['zip'], 
     )
     
-    # MTR Files via Multiple File Uploader
     mtr_files = st.file_uploader(
         "3. Upload ALL MTR Reports (.csv)", 
         type=['csv'], 
@@ -279,7 +267,7 @@ with st.sidebar:
 # --- 3. Main Logic Execution ---
 
 if payment_zip_file and mtr_files:
-    # 1. Process the ZIP file for Payment reports
+    # 1. Process the ZIP file for Payment reports (uncached)
     with st.spinner("Unzipping Payment files..."): 
         payment_data_tuples = process_payment_zip_file(payment_zip_file)
     
@@ -287,9 +275,21 @@ if payment_zip_file and mtr_files:
         st.error("ZIP file processed, but no Payment (.txt) files found inside. Please check the contents of your ZIP file.")
         st.stop()
         
-    # 2. Process files - Pass the hashable list of tuples to the cached function
+    # FIX: Convert MTR files to hashable (content, name) tuples
+    mtr_data_tuples = []
+    with st.spinner("Reading MTR files..."):
+        for file in mtr_files:
+            try:
+                # MTRs are CSVs, so read as utf-8 string
+                content_str = file.getvalue().decode("utf-8") 
+                mtr_data_tuples.append((content_str, file.name))
+            except Exception as e:
+                st.error(f"Error reading {file.name}: {e}")
+                st.stop()
+        
+    # 2. Process files - Pass the hashable list of tuples to the cached functions
     df_financial_master, df_payment_raw_breakdown = process_payment_files(payment_data_tuples)
-    df_logistics_master = process_mtr_files(mtr_files)
+    df_logistics_master = process_mtr_files(mtr_data_tuples)
 
     # 3. Process Cost Sheet (only if uploaded)
     if cost_file:
@@ -297,7 +297,6 @@ if payment_zip_file and mtr_files:
     else:
         df_cost_master = pd.DataFrame()
 
-    # Check for errors in file processing before continuing
     if df_financial_master.empty or df_logistics_master.empty:
         st.error("Data processing failed. Please check file formatting or look for error messages above.")
         st.stop()
@@ -308,13 +307,12 @@ if payment_zip_file and mtr_files:
     
     # --- Dashboard Display ---
     
-    # KPI Cards (Key Metrics)
     total_items = df_reconciliation.shape[0]
     total_mtr_billed = df_reconciliation['MTR Invoice Amount'].sum()
     total_payment_fetched = df_reconciliation['Net Payment'].sum()
     total_fees = df_reconciliation['Total_Fees_KPI'].sum()
     total_tax = df_reconciliation['Total_Tax_TCS_TDS'].sum()
-    total_product_cost = df_reconciliation['Product Cost'].sum() 
+    total_product_cost = (df_reconciliation['Product Cost'] * df_reconciliation['Quantity']).sum() # More accurate total cost
     total_profit = df_reconciliation['Product Profit/Loss'].sum()
 
     st.subheader("Key Business Metrics (Based on Item Reconciliation)")
@@ -330,7 +328,6 @@ if payment_zip_file and mtr_files:
     
     st.markdown("---")
 
-    # Order ID Selection 
     st.header("1. Item-Level Reconciliation Summary (MTR Details + Classified Charges)")
     
     order_id_list = ['All Orders'] + sorted(df_reconciliation['OrderID'].unique().tolist())
@@ -341,12 +338,10 @@ if payment_zip_file and mtr_files:
     else:
         df_display = df_reconciliation.sort_values(by='OrderID', ascending=True)
     
-    # Display the primary reconciliation table
     st.dataframe(df_display, use_container_width=True, hide_index=True)
 
     st.markdown("---")
 
-    # --- EXPORT SECTION ---
     st.header("2. Download Full Reconciliation Report")
     st.info("The Excel file will contain a single sheet with Item Details, Classified Charges, and Profit Calculation.")
 
