@@ -27,13 +27,11 @@ def create_cost_sheet_template():
     
     return output.getvalue()
 
-# FIX 1: MODIFIED THIS FUNCTION
-@st.cache_data(show_spinner="Processing Cost Sheet...")
-def process_cost_sheet(file_bytes, file_name):
-    """Reads the uploaded cost sheet (from bytes) and prepares it for merging."""
+# FIX: Removed @st.cache_data to prevent UnhashableParamError/OOM
+def process_cost_sheet(uploaded_file):
+    """Reads the uploaded cost sheet and prepares it for merging."""
     try:
-        # Read from bytes instead of the file object
-        df_cost = pd.read_excel(io.BytesIO(file_bytes)) 
+        df_cost = pd.read_excel(uploaded_file) 
         df_cost.rename(columns={'SKU': 'Sku'}, inplace=True) 
         df_cost['Sku'] = df_cost['Sku'].astype(str)
         df_cost['Product Cost'] = pd.to_numeric(df_cost['Product Cost'], errors='coerce').fillna(0)
@@ -42,7 +40,7 @@ def process_cost_sheet(file_bytes, file_name):
 
         return df_cost_master
     except Exception as e:
-        st.error(f"Error reading Cost Sheet ({file_name}): Please ensure the file is an Excel file with 'SKU' and 'Product Cost' columns. Details: {e}")
+        st.error(f"Error reading Cost Sheet ({uploaded_file.name}): Please ensure the file is an Excel file with 'SKU' and 'Product Cost' columns. Details: {e}")
         return pd.DataFrame()
 
 @st.cache_data
@@ -64,9 +62,9 @@ def calculate_fee_total(df, keyword, name):
 def process_payment_zip_file(uploaded_zip_file):
     """
     Reads a single uploaded ZIP file, extracts contents, and returns a list of 
-    (file_content_string, file_name) for all Payment (.txt) files.
+    pseudo-file objects for all Payment (.txt) files.
     """
-    payment_data = []
+    payment_files = []
 
     try:
         with zipfile.ZipFile(io.BytesIO(uploaded_zip_file.read()), 'r') as zf:
@@ -76,8 +74,14 @@ def process_payment_zip_file(uploaded_zip_file):
 
                 if name.lower().endswith('.txt'):
                     file_content_bytes = zf.read(name)
-                    file_content_str = file_content_bytes.decode("latin-1")
-                    payment_data.append((file_content_str, name)) # (content, name) tuple
+                    
+                    # Create a pseudo-file object that mimics the st.file_uploader object
+                    pseudo_file = type('FileUploaderObject', (object,), {
+                        'name': name,
+                        'getvalue': lambda: file_content_bytes,
+                        'read': lambda: file_content_bytes 
+                    })()
+                    payment_files.append(pseudo_file)
 
     except zipfile.BadZipFile:
         st.error("Error: The uploaded file is not a valid ZIP file.")
@@ -86,13 +90,13 @@ def process_payment_zip_file(uploaded_zip_file):
         st.error(f"An unexpected error occurred during unzipping: {e}")
         return []
 
-    return payment_data # List of (string, string) tuples
+    return payment_files # List of pseudo-file objects
 
 # --- 1. Data Processing Functions ---
 
-@st.cache_data(show_spinner="Processing Payment Files and Creating Financial Master...")
-def process_payment_files(uploaded_payment_data):
-    """Reads all payment file contents (passed as strings), creates the financial summary."""
+# FIX: Removed @st.cache_data to prevent UnhashableParamError/OOM
+def process_payment_files(uploaded_payment_files):
+    """Reads all payment file objects, creates the financial summary."""
     
     all_payment_data = []
     
@@ -103,9 +107,10 @@ def process_payment_files(uploaded_payment_data):
             'posted-date-time', 'order-item-code', 'merchant-order-item-id', 
             'merchant-adjustment-item-id', 'sku', 'quantity-purchased', 'promotion-id'] 
 
-    for file_content_str, file_name in uploaded_payment_data:
+    for file in uploaded_payment_files:
         try:
-            df_temp = pd.read_csv(io.StringIO(file_content_str), 
+            # Read from the pseudo-file object's value (bytes)
+            df_temp = pd.read_csv(io.StringIO(file.getvalue().decode("latin-1")), 
                                  sep='\t', 
                                  skipinitialspace=True,
                                  header=1)
@@ -116,7 +121,7 @@ def process_payment_files(uploaded_payment_data):
             
             all_payment_data.append(df_temp)
         except Exception as e:
-            st.error(f"Error reading {file_name} (Payment TXT): The file structure is unexpected. Details: {e}")
+            st.error(f"Error reading {file.name} (Payment TXT): The file structure is unexpected. Details: {e}")
             return pd.DataFrame(), pd.DataFrame()
     
     df_payment_raw = pd.concat(all_payment_data, ignore_index=True)
@@ -153,20 +158,21 @@ def process_payment_files(uploaded_payment_data):
     
     return df_financial_master, df_charge_breakdown 
 
-@st.cache_data(show_spinner="Processing MTR Files and Creating Detailed Logistics Master...")
-def process_mtr_files(uploaded_mtr_data):
-    """Reads all uploaded CSV MTR files (passed as strings) and concatenates them."""
+# FIX: Removed @st.cache_data to prevent UnhashableParamError/OOM
+def process_mtr_files(uploaded_mtr_files):
+    """Reads all uploaded CSV MTR files (file objects) and concatenates them."""
     
     all_mtr_data = []
     
-    for content_str, file_name in uploaded_mtr_data:
+    for file in uploaded_mtr_files:
         try:
-            df_temp = pd.read_csv(io.StringIO(content_str)) 
+            # Read directly from the file object
+            df_temp = pd.read_csv(file) 
             df_temp = df_temp.loc[:, ~df_temp.columns.str.contains('^Unnamed')]
             
             all_mtr_data.append(df_temp)
         except Exception as e:
-            st.error(f"Error reading {file_name} (MTR CSV): {e}")
+            st.error(f"Error reading {file.name} (MTR CSV): {e}")
             return pd.DataFrame()
         
     df_mtr_raw = pd.concat(all_mtr_data, ignore_index=True)
@@ -192,6 +198,7 @@ def process_mtr_files(uploaded_mtr_data):
     return df_logistics_master
 
 
+# We KEEP caching here, as this is a CPU-intensive merge operation
 @st.cache_data(show_spinner="Merging data and finalizing calculations...")
 def create_final_reconciliation_df(df_financial_master, df_logistics_master, df_cost_master):
     """Merges detailed MTR data with Payment Net Sale Value, Fees, Tax/TCS, and Product Cost."""
@@ -267,43 +274,29 @@ with st.sidebar:
 
 if payment_zip_file and mtr_files:
     
-    # 1. Process Cost Sheet (if uploaded)
+    # 1. Process Cost Sheet (if uploaded) - Uncached
     if cost_file:
-        # FIX 2: Pass the bytes (hashable) to the cached function
-        cost_file_bytes = cost_file.getvalue()
-        df_cost_master = process_cost_sheet(cost_file_bytes, cost_file.name)
+        df_cost_master = process_cost_sheet(cost_file)
     else:
         df_cost_master = pd.DataFrame()
         
     # 2. Process Payment ZIP (uncached)
     with st.spinner("Unzipping Payment files..."): 
-        payment_data_tuples = process_payment_zip_file(payment_zip_file)
+        payment_file_objects = process_payment_zip_file(payment_zip_file)
     
-    if not payment_data_tuples:
+    if not payment_file_objects:
         st.error("ZIP file processed, but no Payment (.txt) files found inside. Please check the contents of your ZIP file.")
         st.stop()
         
-    # 3. Process MTR files (convert to hashable list of tuples)
-    mtr_data_tuples = []
-    with st.spinner("Reading MTR files..."):
-        for file in mtr_files:
-            try:
-                # MTRs are CSVs, so read as utf-8 string
-                content_str = file.getvalue().decode("utf-8") 
-                mtr_data_tuples.append((content_str, file.name))
-            except Exception as e:
-                st.error(f"Error reading {file.name}: {e}")
-                st.stop()
-        
-    # 4. Process files (Pass hashable data to cached functions)
-    df_financial_master, df_payment_raw_breakdown = process_payment_files(payment_data_tuples)
-    df_logistics_master = process_mtr_files(mtr_data_tuples)
+    # 3. Process files - Call the UNCACHED functions
+    df_financial_master, df_payment_raw_breakdown = process_payment_files(payment_file_objects)
+    df_logistics_master = process_mtr_files(mtr_files)
 
     if df_financial_master.empty or df_logistics_master.empty:
         st.error("Data processing failed. Please check file formatting or look for error messages above.")
         st.stop()
         
-    # 5. Create Final Reconciliation DF
+    # 4. Create Final Reconciliation DF - This step IS CACHED
     df_reconciliation = create_final_reconciliation_df(df_financial_master, df_logistics_master, df_cost_master)
     
     
@@ -314,7 +307,7 @@ if payment_zip_file and mtr_files:
     total_payment_fetched = df_reconciliation['Net Payment'].sum()
     total_fees = df_reconciliation['Total_Fees_KPI'].sum()
     total_tax = df_reconciliation['Total_Tax_TCS_TDS'].sum()
-    total_product_cost = (df_reconciliation['Product Cost'] * df_reconciliation['Quantity']).sum() # More accurate total cost
+    total_product_cost = (df_reconciliation['Product Cost'] * df_reconciliation['Quantity']).sum() 
     total_profit = df_reconciliation['Product Profit/Loss'].sum()
 
     st.subheader("Key Business Metrics (Based on Item Reconciliation)")
