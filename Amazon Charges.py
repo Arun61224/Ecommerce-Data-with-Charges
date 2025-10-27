@@ -1,6 +1,6 @@
 import streamlit as st
 import pandas as pd
-import numpy as np # Numpy ko import karna zaroori hai
+import numpy as np # Numpy को import करना ज़रूरी है
 import io
 import zipfile 
 
@@ -276,8 +276,6 @@ def create_final_reconciliation_df(df_financial_master, df_logistics_master, df_
     df_final.fillna(0, inplace=True)
 
     # 8. Set Product Cost to 0 for refund/replacement/cancel types
-    
-    # --- CHANGE: ADDED 'cancel' TO THE LIST ---
     refund_types_lower = ['cancel refund', 'freereplacement', 'refund', 'cancel']
     
     if 'Transaction Type' in df_final.columns:
@@ -285,10 +283,9 @@ def create_final_reconciliation_df(df_financial_master, df_logistics_master, df_
         
         df_final['Product Cost'] = np.where(
             standardized_transaction_type.isin(refund_types_lower), 
-            0, # Set cost to 0 if it's in the list
-            df_final['Product Cost'] # Otherwise, keep original cost
+            0, 
+            df_final['Product Cost'] 
         )
-    # --- END OF CHANGE ---
 
     # 9. Calculate Profit/Loss
     df_final['Product Profit/Loss'] = (
@@ -409,7 +406,28 @@ if payment_zip_files and mtr_files:
     else:
         df_display = df_reconciliation.sort_values(by='OrderID', ascending=True)
     
-    st.dataframe(df_display, use_container_width=True, hide_index=True)
+    # --- FIX: Apply number formatting to the displayed dataframe ---
+    # Define which columns need formatting
+    format_dict = {
+        'MTR Invoice Amount': '{:.2f}',
+        'Net Payment': '{:.2f}',
+        'Total_Commission_Fee': '{:.2f}',
+        'Total_Fixed_Closing_Fee': '{:.2f}',
+        'Total_FBA_Pick_Pack_Fee': '{:.2f}',
+        'Total_FBA_Weight_Handling_Fee': '{:.2f}',
+        'Total_Technology_Fee': '{:.2f}',
+        'Total_Fees_KPI': '{:.2f}',
+        'Total_Tax_TCS_TDS': '{:.2f}',
+        'Product Cost': '{:.2f}',
+        'Product Profit/Loss': '{:.2f}'
+    }
+    # Apply the formatting
+    st.dataframe(
+        df_display.style.format(format_dict), 
+        use_container_width=True, 
+        hide_index=True
+    )
+    # --- END OF FIX ---
 
     st.markdown("---")
 
