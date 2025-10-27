@@ -2,7 +2,7 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import io
-import zipfile # Import the zipfile module
+import zipfile 
 
 # --- Configuration ---
 st.set_page_config(layout="wide", page_title="Amazon Seller Reconciliation Dashboard")
@@ -32,12 +32,10 @@ def process_cost_sheet(uploaded_file):
     """Reads the uploaded cost sheet and prepares it for merging."""
     try:
         df_cost = pd.read_excel(uploaded_file)
-        # Assuming the template columns are 'SKU' and 'Product Cost'
-        df_cost.rename(columns={'SKU': 'Sku'}, inplace=True) # Rename to match MTR Sku column
+        df_cost.rename(columns={'SKU': 'Sku'}, inplace=True) 
         df_cost['Sku'] = df_cost['Sku'].astype(str)
         df_cost['Product Cost'] = pd.to_numeric(df_cost['Product Cost'], errors='coerce').fillna(0)
         
-        # Aggregate in case of multiple cost entries per SKU (e.g., taking average/first one)
         df_cost_master = df_cost.groupby('Sku')['Product Cost'].mean().reset_index(name='Product Cost')
 
         return df_cost_master
@@ -45,7 +43,6 @@ def process_cost_sheet(uploaded_file):
         st.error(f"Error reading Cost Sheet: Please ensure the file is an Excel file with 'SKU' and 'Product Cost' columns. Details: {e}")
         return pd.DataFrame()
 
-# NEW HELPER: Converts DataFrame to Excel byte object for download
 @st.cache_data
 def convert_to_excel(df):
     """Converts the final DataFrame into an Excel file bytes object."""
@@ -54,8 +51,7 @@ def convert_to_excel(df):
         df.to_excel(writer, sheet_name='Reconciliation_Summary', index=False)
     return output.getvalue()
 
-# MODIFIED HELPER: For unzipping and extracting *only* Payment (.txt) files
-@st.cache_data(show_spinner="Unzipping Payment files...")
+# FIX: Removed @st.cache_data to fix UnserializableReturnValueError
 def process_payment_zip_file(uploaded_zip_file):
     """
     Reads a single uploaded ZIP file, extracts contents in memory,
@@ -64,10 +60,9 @@ def process_payment_zip_file(uploaded_zip_file):
     payment_files = []
 
     try:
-        # Use BytesIO to handle the file content in memory
         with zipfile.ZipFile(io.BytesIO(uploaded_zip_file.read()), 'r') as zf:
             for name in zf.namelist():
-                # Ignore system files, directories, and files in macOS-generated folders
+                # Ignore system files and directories
                 if name.startswith('__MACOSX/') or name.endswith('/') or name.startswith('.'):
                     continue
 
@@ -100,7 +95,6 @@ def process_payment_files(uploaded_payment_files):
     
     all_payment_data = []
     
-    # Define Column Names manually 
     cols = ['settlement-id', 'settlement-start-date', 'settlement-end-date', 'deposit-date', 
             'total-amount', 'currency', 'transaction-type', 'order-id', 'merchant-order-id', 
             'adjustment-id', 'shipment-id', 'marketplace-name', 'amount-type', 
@@ -110,7 +104,6 @@ def process_payment_files(uploaded_payment_files):
 
     for file in uploaded_payment_files:
         try:
-            # Decode using latin-1 for Amazon reports
             df_temp = pd.read_csv(io.StringIO(file.getvalue().decode("latin-1")), 
                                  sep='\t', 
                                  skipinitialspace=True,
@@ -135,7 +128,6 @@ def process_payment_files(uploaded_payment_files):
     charge_breakdown_cols = ['OrderID', 'transaction-type', 'marketplace-name', 'amount-type', 'amount-description', 'amount', 'posted-date', 'settlement-id']
     df_charge_breakdown = df_payment_cleaned[charge_breakdown_cols]
     
-    # --- PIVOTING: Calculate CLASSIFIED AMOUNTS per OrderID ---
     
     def calculate_fee_total(df, keyword, name):
         df_fee = df[df['amount-description'].str.contains(keyword, case=False, na=False)]
@@ -145,19 +137,16 @@ def process_payment_files(uploaded_payment_files):
         
     df_financial_master = df_charge_breakdown.groupby('OrderID')['amount'].sum().reset_index(name='Net_Payment_Fetched')
     
-    # Bifurcated Fees
     df_comm = calculate_fee_total(df_charge_breakdown, 'Commission', 'Total_Commission_Fee')
     df_fixed = calculate_fee_total(df_charge_breakdown, 'Fixed closing fee', 'Total_Fixed_Closing_Fee')
     df_pick = calculate_fee_total(df_charge_breakdown, 'Pick & Pack Fee', 'Total_FBA_Pick_Pack_Fee')
     df_weight = calculate_fee_total(df_charge_breakdown, 'Weight Handling Fee', 'Total_FBA_Weight_Handling_Fee')
     df_tech = calculate_fee_total(df_charge_breakdown, 'Technology Fee', 'Total_Technology_Fee')
     
-    # Tax/TDS/TCS Components
     tax_descriptions = ['TCS', 'TDS', 'Tax']
     df_tax_summary = calculate_fee_total(df_charge_breakdown, '|'.join(tax_descriptions), 'Total_Tax_TCS_TDS')
 
 
-    # --- FINAL FINANCIAL MASTER MERGE ---
     for df in [df_comm, df_fixed, df_pick, df_weight, df_tech, df_tax_summary]: 
         df_financial_master = pd.merge(df_financial_master, df, on='OrderID', how='left').fillna(0)
     
@@ -180,7 +169,6 @@ def process_mtr_files(uploaded_mtr_files):
     
     for file in uploaded_mtr_files:
         try:
-            # Read CSV content from the file object
             df_temp = pd.read_csv(file) 
             df_temp = df_temp.loc[:, ~df_temp.columns.str.contains('^Unnamed')]
             
@@ -207,7 +195,7 @@ def process_mtr_files(uploaded_mtr_files):
     
     df_logistics_master['OrderID'] = df_logistics_master['OrderID'].astype(str)
     df_logistics_master['MTR Invoice Amount'] = pd.to_numeric(df_logistics_master['MTR Invoice Amount'], errors='coerce').fillna(0)
-    df_logistics_master['Sku'] = df_logistics_master['Sku'].astype(str) # Ensure SKU is string for merging
+    df_logistics_master['Sku'] = df_logistics_master['Sku'].astype(str) 
     
     return df_logistics_master
 
@@ -216,7 +204,6 @@ def process_mtr_files(uploaded_mtr_files):
 def create_final_reconciliation_df(df_financial_master, df_logistics_master, df_cost_master):
     """Merges detailed MTR data with Payment Net Sale Value, Fees, Tax/TCS, and Product Cost."""
     
-    # 1. Merge MTR data with Payment classification
     df_final = pd.merge(
         df_logistics_master, 
         df_financial_master, 
@@ -226,26 +213,24 @@ def create_final_reconciliation_df(df_financial_master, df_logistics_master, df_
     
     df_final.rename(columns={'Net_Payment_Fetched': 'Net Payment'}, inplace=True)
     
-    # 2. Merge Product Cost data using SKU
     if not df_cost_master.empty:
         df_final = pd.merge(
             df_final,
             df_cost_master,
-            on='Sku', # Merge on Item SKU
+            on='Sku', 
             how='left'
         ).fillna({'Product Cost': 0})
         
-        # 3. Calculate Product Profit/Loss
+        # Calculate Product Profit/Loss
         df_final['Product Profit/Loss'] = (
             df_final['Net Payment'] - 
             df_final['Total_Fees_KPI'] - 
             df_final['MTR Invoice Amount'] -
-            (df_final['Product Cost'] * df_final['Quantity']) # Multiply cost by quantity
+            (df_final['Product Cost'] * df_final['Quantity'])
         )
     else:
-        # Add placeholder if cost sheet is not uploaded
         df_final['Product Cost'] = 0.00
-        df_final['Product Profit/Loss'] = 0.00 # Placeholder calculation
+        df_final['Product Profit/Loss'] = 0.00 
 
     return df_final
 
@@ -255,7 +240,6 @@ def create_final_reconciliation_df(df_financial_master, df_logistics_master, df_
 with st.sidebar:
     st.header("Upload Raw Data Files")
     
-    # Cost Sheet Template and Upload
     st.subheader("Cost Sheet (Optional)")
     
     excel_template = create_cost_sheet_template()
@@ -275,13 +259,13 @@ with st.sidebar:
 
     st.subheader("Amazon Reports (Mandatory)")
     
-    # MODIFIED: Payment Files via Single ZIP File Uploader
+    # Payment Files via Single ZIP File Uploader
     payment_zip_file = st.file_uploader(
         "2. Upload ALL Payment Reports in a **Single Zipped Folder** (.zip)", 
         type=['zip'], 
     )
     
-    # ORIGINAL: MTR Files via Multiple File Uploader
+    # MTR Files via Multiple File Uploader
     mtr_files = st.file_uploader(
         "3. Upload ALL MTR Reports (.csv)", 
         type=['csv'], 
@@ -294,7 +278,8 @@ with st.sidebar:
 
 if payment_zip_file and mtr_files:
     # 1. Process the ZIP file for Payment reports
-    payment_files = process_payment_zip_file(payment_zip_file)
+    with st.spinner("Unzipping Payment files..."): # Added spinner for the uncached function
+        payment_files = process_payment_zip_file(payment_zip_file)
     
     if not payment_files:
         st.error("ZIP file processed, but no Payment (.txt) files found inside. Please check the contents of your ZIP file.")
@@ -327,7 +312,7 @@ if payment_zip_file and mtr_files:
     total_payment_fetched = df_reconciliation['Net Payment'].sum()
     total_fees = df_reconciliation['Total_Fees_KPI'].sum()
     total_tax = df_reconciliation['Total_Tax_TCS_TDS'].sum()
-    total_product_cost = df_reconciliation['Product Cost'].sum() # This is now per-item cost sum
+    total_product_cost = df_reconciliation['Product Cost'].sum() 
     total_profit = df_reconciliation['Product Profit/Loss'].sum()
 
     st.subheader("Key Business Metrics (Based on Item Reconciliation)")
