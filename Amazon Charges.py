@@ -27,11 +27,13 @@ def create_cost_sheet_template():
     
     return output.getvalue()
 
+# FIX 1: MODIFIED THIS FUNCTION
 @st.cache_data(show_spinner="Processing Cost Sheet...")
-def process_cost_sheet(uploaded_file):
-    """Reads the uploaded cost sheet and prepares it for merging."""
+def process_cost_sheet(file_bytes, file_name):
+    """Reads the uploaded cost sheet (from bytes) and prepares it for merging."""
     try:
-        df_cost = pd.read_excel(uploaded_file)
+        # Read from bytes instead of the file object
+        df_cost = pd.read_excel(io.BytesIO(file_bytes)) 
         df_cost.rename(columns={'SKU': 'Sku'}, inplace=True) 
         df_cost['Sku'] = df_cost['Sku'].astype(str)
         df_cost['Product Cost'] = pd.to_numeric(df_cost['Product Cost'], errors='coerce').fillna(0)
@@ -40,7 +42,7 @@ def process_cost_sheet(uploaded_file):
 
         return df_cost_master
     except Exception as e:
-        st.error(f"Error reading Cost Sheet: Please ensure the file is an Excel file with 'SKU' and 'Product Cost' columns. Details: {e}")
+        st.error(f"Error reading Cost Sheet ({file_name}): Please ensure the file is an Excel file with 'SKU' and 'Product Cost' columns. Details: {e}")
         return pd.DataFrame()
 
 @st.cache_data
@@ -151,17 +153,14 @@ def process_payment_files(uploaded_payment_data):
     
     return df_financial_master, df_charge_breakdown 
 
-# FIX: MODIFIED THIS FUNCTION
 @st.cache_data(show_spinner="Processing MTR Files and Creating Detailed Logistics Master...")
 def process_mtr_files(uploaded_mtr_data):
     """Reads all uploaded CSV MTR files (passed as strings) and concatenates them."""
     
     all_mtr_data = []
     
-    # Iterate over the (content_str, file_name) tuples
     for content_str, file_name in uploaded_mtr_data:
         try:
-            # Read CSV content from the string
             df_temp = pd.read_csv(io.StringIO(content_str)) 
             df_temp = df_temp.loc[:, ~df_temp.columns.str.contains('^Unnamed')]
             
@@ -267,7 +266,16 @@ with st.sidebar:
 # --- 3. Main Logic Execution ---
 
 if payment_zip_file and mtr_files:
-    # 1. Process the ZIP file for Payment reports (uncached)
+    
+    # 1. Process Cost Sheet (if uploaded)
+    if cost_file:
+        # FIX 2: Pass the bytes (hashable) to the cached function
+        cost_file_bytes = cost_file.getvalue()
+        df_cost_master = process_cost_sheet(cost_file_bytes, cost_file.name)
+    else:
+        df_cost_master = pd.DataFrame()
+        
+    # 2. Process Payment ZIP (uncached)
     with st.spinner("Unzipping Payment files..."): 
         payment_data_tuples = process_payment_zip_file(payment_zip_file)
     
@@ -275,7 +283,7 @@ if payment_zip_file and mtr_files:
         st.error("ZIP file processed, but no Payment (.txt) files found inside. Please check the contents of your ZIP file.")
         st.stop()
         
-    # FIX: Convert MTR files to hashable (content, name) tuples
+    # 3. Process MTR files (convert to hashable list of tuples)
     mtr_data_tuples = []
     with st.spinner("Reading MTR files..."):
         for file in mtr_files:
@@ -287,21 +295,15 @@ if payment_zip_file and mtr_files:
                 st.error(f"Error reading {file.name}: {e}")
                 st.stop()
         
-    # 2. Process files - Pass the hashable list of tuples to the cached functions
+    # 4. Process files (Pass hashable data to cached functions)
     df_financial_master, df_payment_raw_breakdown = process_payment_files(payment_data_tuples)
     df_logistics_master = process_mtr_files(mtr_data_tuples)
-
-    # 3. Process Cost Sheet (only if uploaded)
-    if cost_file:
-        df_cost_master = process_cost_sheet(cost_file)
-    else:
-        df_cost_master = pd.DataFrame()
 
     if df_financial_master.empty or df_logistics_master.empty:
         st.error("Data processing failed. Please check file formatting or look for error messages above.")
         st.stop()
         
-    # 4. Create Final Reconciliation DF
+    # 5. Create Final Reconciliation DF
     df_reconciliation = create_final_reconciliation_df(df_financial_master, df_logistics_master, df_cost_master)
     
     
