@@ -31,6 +31,7 @@ def create_cost_sheet_template():
 def process_cost_sheet(uploaded_file):
     """Reads the uploaded cost sheet and prepares it for merging."""
     try:
+        # Pass the file object directly to pandas
         df_cost = pd.read_excel(uploaded_file) 
         df_cost.rename(columns={'SKU': 'Sku'}, inplace=True) 
         df_cost['Sku'] = df_cost['Sku'].astype(str)
@@ -76,10 +77,11 @@ def process_payment_zip_file(uploaded_zip_file):
                     file_content_bytes = zf.read(name)
                     
                     # Create a pseudo-file object that mimics the st.file_uploader object
+                    # FIX: Changed lambda to lambda *args to accept any arguments
                     pseudo_file = type('FileUploaderObject', (object,), {
                         'name': name,
-                        'getvalue': lambda: file_content_bytes,
-                        'read': lambda: file_content_bytes 
+                        'getvalue': lambda *args: file_content_bytes,
+                        'read': lambda *args: file_content_bytes 
                     })()
                     payment_files.append(pseudo_file)
 
@@ -124,9 +126,18 @@ def process_payment_files(uploaded_payment_files):
             st.error(f"Error reading {file.name} (Payment TXT): The file structure is unexpected. Details: {e}")
             return pd.DataFrame(), pd.DataFrame()
     
+    # Check if any data was loaded
+    if not all_payment_data:
+        st.error("No valid payment data was found in the TXT files.")
+        return pd.DataFrame(), pd.DataFrame()
+        
     df_payment_raw = pd.concat(all_payment_data, ignore_index=True)
     df_payment_cleaned = df_payment_raw.dropna(subset=['order-id']).copy()
     
+    if df_payment_cleaned.empty:
+        st.error("Payment files were read, but no valid 'order-id' entries were found.")
+        return pd.DataFrame(), pd.DataFrame()
+        
     df_payment_cleaned.rename(columns={'order-id': 'OrderID'}, inplace=True)
     df_payment_cleaned['OrderID'] = df_payment_cleaned['OrderID'].astype(str)
     df_payment_cleaned['amount'] = pd.to_numeric(df_payment_cleaned['amount'], errors='coerce').fillna(0)
@@ -174,6 +185,10 @@ def process_mtr_files(uploaded_mtr_files):
         except Exception as e:
             st.error(f"Error reading {file.name} (MTR CSV): {e}")
             return pd.DataFrame()
+
+    if not all_mtr_data:
+        st.error("No valid MTR data was found in the CSV files.")
+        return pd.DataFrame()
         
     df_mtr_raw = pd.concat(all_mtr_data, ignore_index=True)
     
