@@ -275,17 +275,16 @@ def create_final_reconciliation_df(df_financial_master, df_logistics_master, df_
     
     df_final.fillna(0, inplace=True)
 
-    # --- FIX: Standardize Transaction Type data BEFORE checking ---
+    # --- FIX: Overwrite the 'Product Cost' column itself ---
     # 8. Set Product Cost to 0 for refund/replacement types
     
-    # Define the refund types (lowercase, no spaces)
     refund_types_lower = ['cancel refund', 'freereplacement']
     
     if 'Transaction Type' in df_final.columns:
         # Standardize the data: convert to string, strip spaces, make lowercase
         standardized_transaction_type = df_final['Transaction Type'].astype(str).str.strip().str.lower()
         
-        # Now, check against the standardized list
+        # Overwrite the 'Product Cost' column based on the condition
         df_final['Product Cost'] = np.where(
             standardized_transaction_type.isin(refund_types_lower), 
             0, # Set cost to 0 if it's a refund
@@ -294,6 +293,7 @@ def create_final_reconciliation_df(df_financial_master, df_logistics_master, df_
     # --- END OF FIX ---
 
     # 9. Calculate Profit/Loss
+    # This calculation will now automatically use the updated 'Product Cost' (0 for refunds)
     df_final['Product Profit/Loss'] = (
         df_final['Net Payment'] - 
         (df_final['Product Cost'] * df_final['Quantity'])
@@ -381,6 +381,7 @@ if payment_zip_files and mtr_files:
     
     # --- Dashboard Display ---
     
+    # This calculation now uses the *updated* 'Product Cost' column (which has 0s for refunds)
     total_items = df_reconciliation.shape[0]
     total_mtr_billed = df_reconciliation['MTR Invoice Amount'].sum()
     total_payment_fetched = df_reconciliation['Net Payment'].sum()
@@ -412,6 +413,7 @@ if payment_zip_files and mtr_files:
     else:
         df_display = df_reconciliation.sort_values(by='OrderID', ascending=True)
     
+    # This dataframe will now show 0 in 'Product Cost' for refunds
     st.dataframe(df_display, use_container_width=True, hide_index=True)
 
     st.markdown("---")
