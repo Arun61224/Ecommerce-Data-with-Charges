@@ -54,15 +54,14 @@ def convert_to_excel(df):
         df.to_excel(writer, sheet_name='Reconciliation_Summary', index=False)
     return output.getvalue()
 
-# NEW HELPER: For unzipping and sorting the files
-@st.cache_data(show_spinner="Unzipping and sorting files...")
-def process_zip_file(uploaded_zip_file):
+# MODIFIED HELPER: For unzipping and extracting *only* Payment (.txt) files
+@st.cache_data(show_spinner="Unzipping Payment files...")
+def process_payment_zip_file(uploaded_zip_file):
     """
     Reads a single uploaded ZIP file, extracts contents in memory,
-    and sorts them into lists of Payment (.txt) and MTR (.csv) files.
+    and returns a list of Payment (.txt) files.
     """
     payment_files = []
-    mtr_files = []
 
     try:
         # Use BytesIO to handle the file content in memory
@@ -72,28 +71,25 @@ def process_zip_file(uploaded_zip_file):
                 if name.startswith('__MACOSX/') or name.endswith('/') or name.startswith('.'):
                     continue
 
-                file_content = zf.read(name)
-                
-                # Create a pseudo-file object to mimic the st.file_uploader object
-                pseudo_file = type('FileUploaderObject', (object,), {
-                    'name': name,
-                    'getvalue': lambda: file_content,
-                    'read': lambda: file_content 
-                })()
-
                 if name.lower().endswith('.txt'):
+                    file_content = zf.read(name)
+                    
+                    # Create a pseudo-file object to mimic the st.file_uploader object
+                    pseudo_file = type('FileUploaderObject', (object,), {
+                        'name': name,
+                        'getvalue': lambda: file_content,
+                        'read': lambda: file_content 
+                    })()
                     payment_files.append(pseudo_file)
-                elif name.lower().endswith('.csv'):
-                    mtr_files.append(pseudo_file)
 
     except zipfile.BadZipFile:
         st.error("Error: The uploaded file is not a valid ZIP file.")
-        return [], []
+        return []
     except Exception as e:
         st.error(f"An unexpected error occurred during unzipping: {e}")
-        return [], []
+        return []
 
-    return payment_files, mtr_files
+    return payment_files
 
 
 # --- 1. Data Processing Functions ---
@@ -105,7 +101,6 @@ def process_payment_files(uploaded_payment_files):
     all_payment_data = []
     
     # Define Column Names manually 
-    # (Assuming Indian marketplace report structure, 24 columns)
     cols = ['settlement-id', 'settlement-start-date', 'settlement-end-date', 'deposit-date', 
             'total-amount', 'currency', 'transaction-type', 'order-id', 'merchant-order-id', 
             'adjustment-id', 'shipment-id', 'marketplace-name', 'amount-type', 
@@ -185,8 +180,8 @@ def process_mtr_files(uploaded_mtr_files):
     
     for file in uploaded_mtr_files:
         try:
-            # Read CSV content from the pseudo-file object
-            df_temp = pd.read_csv(io.StringIO(file.getvalue().decode('utf-8'))) 
+            # Read CSV content from the file object
+            df_temp = pd.read_csv(file) 
             df_temp = df_temp.loc[:, ~df_temp.columns.str.contains('^Unnamed')]
             
             all_mtr_data.append(df_temp)
@@ -280,32 +275,36 @@ with st.sidebar:
 
     st.subheader("Amazon Reports (Mandatory)")
     
-    # MODIFIED: Single ZIP File Uploader
-    zip_file = st.file_uploader(
-        "2. Upload ALL Payment (.txt) and MTR (.csv) Reports in a **Single Zipped Folder** (.zip)", 
+    # MODIFIED: Payment Files via Single ZIP File Uploader
+    payment_zip_file = st.file_uploader(
+        "2. Upload ALL Payment Reports in a **Single Zipped Folder** (.zip)", 
         type=['zip'], 
+    )
+    
+    # ORIGINAL: MTR Files via Multiple File Uploader
+    mtr_files = st.file_uploader(
+        "3. Upload ALL MTR Reports (.csv)", 
+        type=['csv'], 
+        accept_multiple_files=True
     )
     st.markdown("---")
 
 
 # --- 3. Main Logic Execution ---
 
-if zip_file:
-    # Process the ZIP file first to get the individual files
-    payment_files, mtr_files = process_zip_file(zip_file)
+if payment_zip_file and mtr_files:
+    # 1. Process the ZIP file for Payment reports
+    payment_files = process_payment_zip_file(payment_zip_file)
     
     if not payment_files:
-        st.warning("ZIP file processed, but no Payment (.txt) files found.")
-        st.stop()
-    if not mtr_files:
-        st.warning("ZIP file processed, but no MTR (.csv) files found.")
+        st.error("ZIP file processed, but no Payment (.txt) files found inside. Please check the contents of your ZIP file.")
         st.stop()
         
-    # Process files
+    # 2. Process files
     df_financial_master, df_payment_raw_breakdown = process_payment_files(payment_files)
     df_logistics_master = process_mtr_files(mtr_files)
 
-    # Process Cost Sheet (only if uploaded)
+    # 3. Process Cost Sheet (only if uploaded)
     if cost_file:
         df_cost_master = process_cost_sheet(cost_file)
     else:
@@ -316,7 +315,7 @@ if zip_file:
         st.error("Data processing failed. Please check file formatting or look for error messages above.")
         st.stop()
         
-    # Create Final Reconciliation DF
+    # 4. Create Final Reconciliation DF
     df_reconciliation = create_final_reconciliation_df(df_financial_master, df_logistics_master, df_cost_master)
     
     
@@ -374,4 +373,4 @@ if zip_file:
     )
     
 else:
-    st.info("Please upload your Payment (.txt) and MTR (.csv) files within a **Compressed ZIP Folder** in the sidebar to start the reconciliation. The dashboard will appear automatically once the ZIP file is uploaded.")
+    st.info("Please upload your **Payment Reports (.zip)** and **MTR Reports (.csv)** in the sidebar to start the reconciliation. The dashboard will appear automatically once files are uploaded.")
