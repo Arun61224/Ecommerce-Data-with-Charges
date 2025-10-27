@@ -1,6 +1,6 @@
 import streamlit as st
 import pandas as pd
-import numpy as np
+import numpy as np # Numpy को import करना ज़रूरी है
 import io
 import zipfile 
 
@@ -161,10 +161,11 @@ def process_payment_files(uploaded_payment_files):
     for df in [df_comm, df_fixed, df_pick, df_weight, df_tech, df_tax_summary]: 
         df_financial_master = pd.merge(df_financial_master, df, on='OrderID', how='left').fillna(0)
     
+    # CHANGE 2: Removed 'Total_FBA_Pick_Pack_Fee' as requested
     df_financial_master['Total_Fees_KPI'] = (
         df_financial_master['Total_Commission_Fee'] +
         df_financial_master['Total_Fixed_Closing_Fee'] +
-        df_financial_master['Total_FBA_Pick_Pack_Fee'] +
+        # 'Total_FBA_Pick_Pack_Fee' is EXCLUDED as per user request
         df_financial_master['Total_FBA_Weight_Handling_Fee'] +
         df_financial_master['Total_Technology_Fee']
     )
@@ -232,33 +233,61 @@ def process_mtr_files(uploaded_mtr_files):
 def create_final_reconciliation_df(df_financial_master, df_logistics_master, df_cost_master):
     """Merges detailed MTR data with Payment Net Sale Value, Fees, Tax/TCS, and Product Cost."""
     
+    # CHANGE 1: Allocate payments proportionally
+    
+    # 1. Merge MTR data (multiple items per order) with financial data (one summary per order)
     df_final = pd.merge(
         df_logistics_master, 
         df_financial_master, 
         on='OrderID', 
         how='left'
-    ).fillna(0)
+    )
+
+    # 2. Get the total MTR Invoice Amount for each order
+    df_final['Total_MTR_per_Order'] = df_final.groupby('OrderID')['MTR Invoice Amount'].transform('sum')
     
+    # 3. Get the number of items for each order (for cases where Total_MTR is 0)
+    df_final['Item_Count_per_Order'] = df_final.groupby('OrderID')['OrderID'].transform('count')
+
+    # 4. Determine the proportion for this specific item
+    df_final['Proportion'] = np.where(
+        df_final['Total_MTR_per_Order'] > 0, # Case 1: If Total MTR is not zero
+        df_final['MTR Invoice Amount'] / df_final['Total_MTR_per_Order'], # Use MTR ratio
+        1 / df_final['Item_Count_per_Order'] # Case 2: If Total MTR is zero, split equally
+    )
+
+    # 5. Get list of all financial columns that need to be allocated
+    financial_cols_to_allocate = list(df_financial_master.columns.drop('OrderID'))
+    
+    # 6. Apply the proportion to all financial columns
+    for col in financial_cols_to_allocate:
+        df_final[col] = df_final[col] * df_final['Proportion']
+
+    # Rename Net_Payment_Fetched to Net Payment *after* allocation
     df_final.rename(columns={'Net_Payment_Fetched': 'Net Payment'}, inplace=True)
-    
+
+    # 7. Merge Product Cost (this is already at the item/SKU level, no allocation needed)
     if not df_cost_master.empty:
         df_final = pd.merge(
             df_final,
             df_cost_master,
             on='Sku', 
             how='left'
-        ).fillna({'Product Cost': 0})
-        
-        # --- CALCULATION CHANGE AS REQUESTED BY USER ---
-        # Profit = (Net Payment) - (Product Cost * Quantity)
-        # Fees are no longer subtracted here.
-        df_final['Product Profit/Loss'] = (
-            df_final['Net Payment'] - 
-            (df_final['Product Cost'] * df_final['Quantity'])
         )
     else:
         df_final['Product Cost'] = 0.00
-        df_final['Product Profit/Loss'] = 0.00 # Placeholder
+    
+    # Fill any NaNs that resulted from merges (especially for cost)
+    df_final.fillna(0, inplace=True)
+
+    # 8. Calculate Profit/Loss based on user's last request (Net Payment - Cost)
+    df_final['Product Profit/Loss'] = (
+        df_final['Net Payment'] - 
+        (df_final['Product Cost'] * df_final['Quantity'])
+    )
+
+    # Clean up helper columns
+    df_final.drop(columns=['Total_MTR_per_Order', 'Item_Count_per_Order', 'Proportion'], inplace=True, errors='ignore')
 
     return df_final
 
