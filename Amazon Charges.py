@@ -22,16 +22,17 @@ def create_cost_sheet_template():
     df = pd.DataFrame(template_data)
     
     output = io.BytesIO()
+    # This line needs 'xlsxwriter' library
     with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
         df.to_excel(writer, sheet_name='Cost_Sheet_Template', index=False)
     
     return output.getvalue()
 
-# FIX: Removed @st.cache_data to prevent UnhashableParamError/OOM
+# Uncached function
 def process_cost_sheet(uploaded_file):
     """Reads the uploaded cost sheet and prepares it for merging."""
     try:
-        # Pass the file object directly to pandas
+        # This line needs 'openpyxl' library
         df_cost = pd.read_excel(uploaded_file) 
         df_cost.rename(columns={'SKU': 'Sku'}, inplace=True) 
         df_cost['Sku'] = df_cost['Sku'].astype(str)
@@ -76,12 +77,11 @@ def process_payment_zip_file(uploaded_zip_file):
                 if name.lower().endswith('.txt'):
                     file_content_bytes = zf.read(name)
                     
-                    # Create a pseudo-file object that mimics the st.file_uploader object
-                    # FIX: Changed lambda to lambda *args to accept any arguments
+                    # FIX for the lambda error: lambda *args
                     pseudo_file = type('FileUploaderObject', (object,), {
                         'name': name,
-                        'getvalue': lambda *args: file_content_bytes,
-                        'read': lambda *args: file_content_bytes 
+                        'getvalue': lambda *args, b=file_content_bytes: b,
+                        'read': lambda *args, b=file_content_bytes: b
                     })()
                     payment_files.append(pseudo_file)
 
@@ -96,7 +96,7 @@ def process_payment_zip_file(uploaded_zip_file):
 
 # --- 1. Data Processing Functions ---
 
-# FIX: Removed @st.cache_data to prevent UnhashableParamError/OOM
+# Uncached function
 def process_payment_files(uploaded_payment_files):
     """Reads all payment file objects, creates the financial summary."""
     
@@ -111,7 +111,6 @@ def process_payment_files(uploaded_payment_files):
 
     for file in uploaded_payment_files:
         try:
-            # Read from the pseudo-file object's value (bytes)
             df_temp = pd.read_csv(io.StringIO(file.getvalue().decode("latin-1")), 
                                  sep='\t', 
                                  skipinitialspace=True,
@@ -126,7 +125,6 @@ def process_payment_files(uploaded_payment_files):
             st.error(f"Error reading {file.name} (Payment TXT): The file structure is unexpected. Details: {e}")
             return pd.DataFrame(), pd.DataFrame()
     
-    # Check if any data was loaded
     if not all_payment_data:
         st.error("No valid payment data was found in the TXT files.")
         return pd.DataFrame(), pd.DataFrame()
@@ -169,7 +167,7 @@ def process_payment_files(uploaded_payment_files):
     
     return df_financial_master, df_charge_breakdown 
 
-# FIX: Removed @st.cache_data to prevent UnhashableParamError/OOM
+# Uncached function
 def process_mtr_files(uploaded_mtr_files):
     """Reads all uploaded CSV MTR files (file objects) and concatenates them."""
     
@@ -177,7 +175,6 @@ def process_mtr_files(uploaded_mtr_files):
     
     for file in uploaded_mtr_files:
         try:
-            # Read directly from the file object
             df_temp = pd.read_csv(file) 
             df_temp = df_temp.loc[:, ~df_temp.columns.str.contains('^Unnamed')]
             
