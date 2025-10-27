@@ -67,7 +67,6 @@ def process_payment_zip_file(uploaded_zip_file):
     payment_files = []
 
     try:
-        # Use the file object directly with zipfile
         with zipfile.ZipFile(uploaded_zip_file, 'r') as zf:
             for name in zf.namelist():
                 if name.startswith('__MACOSX/') or name.endswith('/') or name.startswith('.'):
@@ -76,7 +75,6 @@ def process_payment_zip_file(uploaded_zip_file):
                 if name.lower().endswith('.txt'):
                     file_content_bytes = zf.read(name)
                     
-                    # Create a pseudo-file object that mimics the st.file_uploader object
                     pseudo_file = type('FileUploaderObject', (object,), {
                         'name': name,
                         'getvalue': lambda *args, b=file_content_bytes: b,
@@ -95,39 +93,45 @@ def process_payment_zip_file(uploaded_zip_file):
 
 # --- 1. Data Processing Functions ---
 
-# Uncached function
+# FIX: Removed hard-coded 24-column list. Now dynamically finds required columns.
 def process_payment_files(uploaded_payment_files):
-    """Reads all payment file objects, creates the financial summary."""
+    """Reads all payment file objects in chunks to save memory."""
     
-    all_payment_data = []
+    all_payment_data = [] # This will hold the small, processed chunks
     
-    cols = ['settlement-id', 'settlement-start-date', 'settlement-end-date', 'deposit-date', 
-            'total-amount', 'currency', 'transaction-type', 'order-id', 'merchant-order-id', 
-            'adjustment-id', 'shipment-id', 'marketplace-name', 'amount-type', 
-            'amount-description', 'amount', 'fulfillment-id', 'posted-date', 
-            'posted-date-time', 'order-item-code', 'merchant-order-item-id', 
-            'merchant-adjustment-item-id', 'sku', 'quantity-purchased', 'promotion-id'] 
-
+    # We only care about these columns.
     required_cols = ['order-id', 'amount-description', 'amount']
 
     for file in uploaded_payment_files:
         try:
-            df_temp = pd.read_csv(io.StringIO(file.getvalue().decode("latin-1")), 
-                                 sep='\t', 
-                                 skipinitialspace=True,
-                                 header=1)
-            
-            if len(df_temp.columns) > len(cols):
-                df_temp = df_temp.iloc[:, :len(cols)]
-            df_temp.columns = cols 
-            
-            df_temp.dropna(subset=['order-id'], inplace=True)
-            
-            df_temp_small = df_temp[required_cols].copy()
-            
-            all_payment_data.append(df_temp_small)
-            
-            del df_temp
+            # Use chunksize to read the large file in parts
+            chunk_iter = pd.read_csv(
+                io.StringIO(file.getvalue().decode("latin-1")), 
+                sep='\t', 
+                skipinitialspace=True,
+                header=1, # This reads the column names from the file
+                chunksize=100000 # Process 100,000 lines at a time
+            )
+
+            first_chunk = True
+            for chunk in chunk_iter:
+                # Check columns only on the first chunk to avoid repeating errors
+                if first_chunk:
+                    # Check if all our required columns are in the file
+                    missing_cols = [col for col in required_cols if col not in chunk.columns]
+                    if missing_cols:
+                        st.error(f"Error in {file.name}: The file is missing essential columns: {', '.join(missing_cols)}. Please make sure these columns exist.")
+                        return pd.DataFrame(), pd.DataFrame() # Stop processing
+                    first_chunk = False
+                
+                # Drop rows with no order-id first
+                chunk.dropna(subset=['order-id'], inplace=True)
+                
+                # MEMORY SAVING: Keep only the columns we need
+                chunk_small = chunk[required_cols].copy()
+                
+                all_payment_data.append(chunk_small)
+                del chunk
             
         except Exception as e:
             st.error(f"Error reading {file.name} (Payment TXT): The file structure is unexpected. Details: {e}")
@@ -137,6 +141,7 @@ def process_payment_files(uploaded_payment_files):
         st.error("No valid payment data was found in the TXT files.")
         return pd.DataFrame(), pd.DataFrame()
         
+    # Concatenate all the small chunks together
     df_charge_breakdown = pd.concat(all_payment_data, ignore_index=True)
     
     if df_charge_breakdown.empty:
@@ -185,15 +190,17 @@ def process_mtr_files(uploaded_mtr_files):
     
     for file in uploaded_mtr_files:
         try:
-            df_temp = pd.read_csv(file) 
-            df_temp = df_temp.loc[:, ~df_temp.columns.str.contains('^Unnamed')]
+            chunk_iter = pd.read_csv(file, chunksize=100000)
             
-            cols_to_keep = [col for col in required_mtr_cols if col in df_temp.columns]
-            df_temp_small = df_temp[cols_to_keep].copy()
+            for chunk in chunk_iter:
+                chunk = chunk.loc[:, ~chunk.columns.str.contains('^Unnamed')]
+                
+                cols_to_keep = [col for col in required_mtr_cols if col in chunk.columns]
+                chunk_small = chunk[cols_to_keep].copy()
 
-            all_mtr_data.append(df_temp_small)
-            del df_temp
-            
+                all_mtr_data.append(chunk_small)
+                del chunk
+
         except Exception as e:
             st.error(f"Error reading {file.name} (MTR CSV): {e}")
             return pd.DataFrame()
@@ -284,11 +291,10 @@ with st.sidebar:
 
     st.subheader("Amazon Reports (Mandatory)")
     
-    # MODIFIED: Allow multiple zip files
     payment_zip_files = st.file_uploader(
         "2. Upload ALL Payment Reports in **one or more Zipped Folders** (.zip)", 
         type=['zip'],
-        accept_multiple_files=True # This allows multiple uploads
+        accept_multiple_files=True 
     )
     
     mtr_files = st.file_uploader(
@@ -301,7 +307,6 @@ with st.sidebar:
 
 # --- 3. Main Logic Execution ---
 
-# MODIFIED: Check for payment_zip_files (plural)
 if payment_zip_files and mtr_files:
     
     # 1. Process Cost Sheet (if uploaded) - Uncached
@@ -311,21 +316,21 @@ if payment_zip_files and mtr_files:
         df_cost_master = pd.DataFrame()
         
     # 2. Process Payment ZIP (uncached)
-    all_payment_file_objects = [] # Create a list to hold files from all zips
+    all_payment_file_objects = [] 
     with st.spinner("Unzipping Payment files..."): 
-        for zip_file in payment_zip_files: # Loop through each uploaded zip file
+        for zip_file in payment_zip_files: 
             payment_file_objects = process_payment_zip_file(zip_file)
-            all_payment_file_objects.extend(payment_file_objects) # Add them to the master list
+            all_payment_file_objects.extend(payment_file_objects) 
     
-    if not all_payment_file_objects: # Check the master list
+    if not all_payment_file_objects: 
         st.error("ZIP file(s) processed, but no Payment (.txt) files found inside.")
         st.stop()
         
-    # 3. Process files - Call the UNCACHED functions
-    with st.spinner("Processing Payment files..."):
-        df_financial_master, df_payment_raw_breakdown = process_payment_files(all_payment_file_objects) # Pass the master list
+    # 3. Process files - Call the UNCACHED, memory-efficient functions
+    with st.spinner("Processing Payment files... (This may take a while for large files)"):
+        df_financial_master, df_payment_raw_breakdown = process_payment_files(all_payment_file_objects) 
     
-    with st.spinner("Processing MTR files..."):
+    with st.spinner("Processing MTR files... (This may take a while for large files)"):
         df_logistics_master = process_mtr_files(mtr_files)
 
     if df_financial_master.empty or df_logistics_master.empty:
@@ -352,7 +357,7 @@ if payment_zip_files and mtr_files:
     col_kpi1.metric("Total Items", f"{total_items:,}")
     col_kpi2.metric("Total Net Payment", f"INR {total_payment_fetched:,.2f}")
     col_kpi3.metric("Total MTR Invoiced", f"INR {total_mtr_billed:,.2f}")
-    col_kpi4.metric("Total Amazon Fees", f"INR {total_fees:,.2f}")
+    col_kpi4.metric("Total Amazon Fees", f"INR {total_fees:.2f}")
     col_kpi5.metric("Total Product Cost", f"INR {total_product_cost:,.2f}")
     col_kpi6.metric("TOTAL PROFIT/LOSS", f"INR {total_profit:,.2f}", 
                      delta=f"Tax/TCS: INR {total_tax:,.2f}")
