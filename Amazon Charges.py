@@ -93,13 +93,12 @@ def process_payment_zip_file(uploaded_zip_file):
 
 # --- 1. Data Processing Functions ---
 
-# FIX: Made column checking robust (lowercase, strips spaces, assumes header=0)
+# Uncached function
 def process_payment_files(uploaded_payment_files):
     """Reads all payment file objects in chunks to save memory."""
     
-    all_payment_data = [] # This will hold the small, processed chunks
+    all_payment_data = [] 
     
-    # We only care about these columns, in lowercase.
     required_cols_lower = ['order-id', 'amount-description', 'amount']
 
     for file in uploaded_payment_files:
@@ -108,27 +107,23 @@ def process_payment_files(uploaded_payment_files):
                 io.StringIO(file.getvalue().decode("latin-1")), 
                 sep='\t', 
                 skipinitialspace=True,
-                header=0, # Assume header is on the FIRST line (index 0)
+                header=0, # Assume header is on the FIRST line
                 chunksize=100000 
             )
 
             first_chunk = True
             for chunk in chunk_iter:
-                # Standardize column names: lowercase and strip spaces
                 chunk.columns = [str(col).strip().lower() for col in chunk.columns]
                 
                 if first_chunk:
-                    # Check if all our required (lowercase) columns are in the chunk's (lowercase) columns
                     missing_cols = [col for col in required_cols_lower if col not in chunk.columns]
                     if missing_cols:
                         st.error(f"Error in {file.name}: The file is missing essential columns: {', '.join(missing_cols)}. Please check your file's header row for typos.")
-                        return pd.DataFrame(), pd.DataFrame() # Stop processing
+                        return pd.DataFrame(), pd.DataFrame() 
                     first_chunk = False
                 
-                # Drop rows with no order-id first
                 chunk.dropna(subset=['order-id'], inplace=True)
                 
-                # MEMORY SAVING: Keep only the columns we need (using the lowercase list)
                 chunk_small = chunk[required_cols_lower].copy()
                 
                 all_payment_data.append(chunk_small)
@@ -148,14 +143,12 @@ def process_payment_files(uploaded_payment_files):
         st.error("Payment files were read, but no valid 'order-id' entries were found.")
         return pd.DataFrame(), pd.DataFrame()
         
-    # Rename the standardized lowercase column to our expected 'OrderID'
     df_charge_breakdown.rename(columns={'order-id': 'OrderID'}, inplace=True)
     df_charge_breakdown['OrderID'] = df_charge_breakdown['OrderID'].astype(str)
     df_charge_breakdown['amount'] = pd.to_numeric(df_charge_breakdown['amount'], errors='coerce').fillna(0)
     
     df_financial_master = df_charge_breakdown.groupby('OrderID')['amount'].sum().reset_index(name='Net_Payment_Fetched')
     
-    # Use the standardized 'amount-description' column for calculations
     df_comm = calculate_fee_total(df_charge_breakdown, 'Commission', 'Total_Commission_Fee')
     df_fixed = calculate_fee_total(df_charge_breakdown, 'Fixed closing fee', 'Total_Fixed_Closing_Fee')
     df_pick = calculate_fee_total(df_charge_breakdown, 'Pick & Pack Fee', 'Total_FBA_Pick_Pack_Fee')
@@ -256,15 +249,16 @@ def create_final_reconciliation_df(df_financial_master, df_logistics_master, df_
             how='left'
         ).fillna({'Product Cost': 0})
         
+        # --- CALCULATION CHANGE AS REQUESTED BY USER ---
+        # Profit = (Net Payment) - (Product Cost * Quantity)
+        # Fees are no longer subtracted here.
         df_final['Product Profit/Loss'] = (
             df_final['Net Payment'] - 
-            df_final['Total_Fees_KPI'] - 
-            df_final['MTR Invoice Amount'] -
             (df_final['Product Cost'] * df_final['Quantity'])
         )
     else:
         df_final['Product Cost'] = 0.00
-        df_final['Product Profit/Loss'] = 0.00 
+        df_final['Product Profit/Loss'] = 0.00 # Placeholder
 
     return df_final
 
