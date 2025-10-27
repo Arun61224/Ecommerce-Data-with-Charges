@@ -164,7 +164,6 @@ def process_payment_files(uploaded_payment_files):
     df_financial_master['Total_Fees_KPI'] = (
         df_financial_master['Total_Commission_Fee'] +
         df_financial_master['Total_Fixed_Closing_Fee'] +
-        # 'Total_FBA_Pick_Pack_Fee' is EXCLUDED as per user request
         df_financial_master['Total_FBA_Weight_Handling_Fee'] +
         df_financial_master['Total_Technology_Fee']
     )
@@ -232,7 +231,7 @@ def process_mtr_files(uploaded_mtr_files):
 def create_final_reconciliation_df(df_financial_master, df_logistics_master, df_cost_master):
     """Merges detailed MTR data with Payment Net Sale Value, Fees, Tax/TCS, and Product Cost."""
     
-    # 1. Merge MTR data (multiple items per order) with financial data (one summary per order)
+    # 1. Merge MTR data with financial data
     df_final = pd.merge(
         df_logistics_master, 
         df_financial_master, 
@@ -263,7 +262,7 @@ def create_final_reconciliation_df(df_financial_master, df_logistics_master, df_
     # Rename Net_Payment_Fetched to Net Payment *after* allocation
     df_final.rename(columns={'Net_Payment_Fetched': 'Net Payment'}, inplace=True)
 
-    # 7. Merge Product Cost (this is already at the item/SKU level, no allocation needed)
+    # 7. Merge Product Cost
     if not df_cost_master.empty:
         df_final = pd.merge(
             df_final,
@@ -274,24 +273,27 @@ def create_final_reconciliation_df(df_financial_master, df_logistics_master, df_
     else:
         df_final['Product Cost'] = 0.00
     
-    # Fill any NaNs that resulted from merges (especially for cost)
     df_final.fillna(0, inplace=True)
 
-    # --- NEW CHANGE AS REQUESTED ---
+    # --- FIX: Standardize Transaction Type data BEFORE checking ---
     # 8. Set Product Cost to 0 for refund/replacement types
-    refund_types = ['Cancel Refund', 'FreeReplacement']
-    # Check if 'Transaction Type' column exists (it should, from MTR)
+    
+    # Define the refund types (lowercase, no spaces)
+    refund_types_lower = ['cancel refund', 'freereplacement']
+    
     if 'Transaction Type' in df_final.columns:
-        # Set 'Product Cost' to 0 where 'Transaction Type' is in the list
+        # Standardize the data: convert to string, strip spaces, make lowercase
+        standardized_transaction_type = df_final['Transaction Type'].astype(str).str.strip().str.lower()
+        
+        # Now, check against the standardized list
         df_final['Product Cost'] = np.where(
-            df_final['Transaction Type'].isin(refund_types), 
-            0, 
-            df_final['Product Cost']
+            standardized_transaction_type.isin(refund_types_lower), 
+            0, # Set cost to 0 if it's a refund
+            df_final['Product Cost'] # Otherwise, keep original cost
         )
-    # --- END OF NEW CHANGE ---
+    # --- END OF FIX ---
 
-    # 9. Calculate Profit/Loss based on user's last request (Net Payment - Cost)
-    # This will now use the *adjusted* Product Cost (which is 0 for refunds)
+    # 9. Calculate Profit/Loss
     df_final['Product Profit/Loss'] = (
         df_final['Net Payment'] - 
         (df_final['Product Cost'] * df_final['Quantity'])
