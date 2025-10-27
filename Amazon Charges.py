@@ -161,7 +161,6 @@ def process_payment_files(uploaded_payment_files):
     for df in [df_comm, df_fixed, df_pick, df_weight, df_tech, df_tax_summary]: 
         df_financial_master = pd.merge(df_financial_master, df, on='OrderID', how='left').fillna(0)
     
-    # CHANGE 2: Removed 'Total_FBA_Pick_Pack_Fee' as requested
     df_financial_master['Total_Fees_KPI'] = (
         df_financial_master['Total_Commission_Fee'] +
         df_financial_master['Total_Fixed_Closing_Fee'] +
@@ -233,8 +232,6 @@ def process_mtr_files(uploaded_mtr_files):
 def create_final_reconciliation_df(df_financial_master, df_logistics_master, df_cost_master):
     """Merges detailed MTR data with Payment Net Sale Value, Fees, Tax/TCS, and Product Cost."""
     
-    # CHANGE 1: Allocate payments proportionally
-    
     # 1. Merge MTR data (multiple items per order) with financial data (one summary per order)
     df_final = pd.merge(
         df_logistics_master, 
@@ -280,7 +277,21 @@ def create_final_reconciliation_df(df_financial_master, df_logistics_master, df_
     # Fill any NaNs that resulted from merges (especially for cost)
     df_final.fillna(0, inplace=True)
 
-    # 8. Calculate Profit/Loss based on user's last request (Net Payment - Cost)
+    # --- NEW CHANGE AS REQUESTED ---
+    # 8. Set Product Cost to 0 for refund/replacement types
+    refund_types = ['Cancel Refund', 'FreeReplacement']
+    # Check if 'Transaction Type' column exists (it should, from MTR)
+    if 'Transaction Type' in df_final.columns:
+        # Set 'Product Cost' to 0 where 'Transaction Type' is in the list
+        df_final['Product Cost'] = np.where(
+            df_final['Transaction Type'].isin(refund_types), 
+            0, 
+            df_final['Product Cost']
+        )
+    # --- END OF NEW CHANGE ---
+
+    # 9. Calculate Profit/Loss based on user's last request (Net Payment - Cost)
+    # This will now use the *adjusted* Product Cost (which is 0 for refunds)
     df_final['Product Profit/Loss'] = (
         df_final['Net Payment'] - 
         (df_final['Product Cost'] * df_final['Quantity'])
@@ -385,7 +396,7 @@ if payment_zip_files and mtr_files:
     col_kpi4.metric("Total Amazon Fees", f"INR {total_fees:.2f}")
     col_kpi5.metric("Total Product Cost", f"INR {total_product_cost:,.2f}")
     col_kpi6.metric("TOTAL PROFIT/LOSS", f"INR {total_profit:,.2f}", 
-                     delta=f"Tax/TCS: INR {total_tax:,.2f}")
+                     delta=f"Tax/TCS: INR {total_tax:.2f}")
     
     st.markdown("---")
 
