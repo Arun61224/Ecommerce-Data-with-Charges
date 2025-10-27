@@ -1,6 +1,6 @@
 import streamlit as st
 import pandas as pd
-import numpy as np # Numpy को import करना ज़रूरी है
+import numpy as np # Numpy ko import karna zaroori hai
 import io
 import zipfile 
 
@@ -275,17 +275,17 @@ def create_final_reconciliation_df(df_financial_master, df_logistics_master, df_
     
     df_final.fillna(0, inplace=True)
 
-    # 8. Set Product Cost to 0 for refund/replacement types
+    # 8. Set Product Cost to 0 for refund/replacement/cancel types
     
-    # --- CHANGE: ADDED 'refund' TO THE LIST ---
-    refund_types_lower = ['cancel refund', 'freereplacement', 'refund']
+    # --- CHANGE: ADDED 'cancel' TO THE LIST ---
+    refund_types_lower = ['cancel refund', 'freereplacement', 'refund', 'cancel']
     
     if 'Transaction Type' in df_final.columns:
         standardized_transaction_type = df_final['Transaction Type'].astype(str).str.strip().str.lower()
         
         df_final['Product Cost'] = np.where(
             standardized_transaction_type.isin(refund_types_lower), 
-            0, # Set cost to 0 if it's a refund
+            0, # Set cost to 0 if it's in the list
             df_final['Product Cost'] # Otherwise, keep original cost
         )
     # --- END OF CHANGE ---
