@@ -51,13 +51,14 @@ def convert_to_excel(df):
         df.to_excel(writer, sheet_name='Reconciliation_Summary', index=False)
     return output.getvalue()
 
-# FIX: Removed @st.cache_data to fix UnserializableReturnValueError
+# FIX 1: Removed @st.cache_data and modified return value. 
+# Returns a list of hashable tuples: (file_content_string, file_name)
 def process_payment_zip_file(uploaded_zip_file):
     """
-    Reads a single uploaded ZIP file, extracts contents in memory,
-    and returns a list of Payment (.txt) files.
+    Reads a single uploaded ZIP file, extracts contents, and returns a list of 
+    (file_content_string, file_name) for all Payment (.txt) files.
     """
-    payment_files = []
+    payment_data = []
 
     try:
         with zipfile.ZipFile(io.BytesIO(uploaded_zip_file.read()), 'r') as zf:
@@ -67,15 +68,10 @@ def process_payment_zip_file(uploaded_zip_file):
                     continue
 
                 if name.lower().endswith('.txt'):
-                    file_content = zf.read(name)
-                    
-                    # Create a pseudo-file object to mimic the st.file_uploader object
-                    pseudo_file = type('FileUploaderObject', (object,), {
-                        'name': name,
-                        'getvalue': lambda: file_content,
-                        'read': lambda: file_content 
-                    })()
-                    payment_files.append(pseudo_file)
+                    file_content_bytes = zf.read(name)
+                    # Decode to string immediately, which is hashable
+                    file_content_str = file_content_bytes.decode("latin-1")
+                    payment_data.append((file_content_str, name))
 
     except zipfile.BadZipFile:
         st.error("Error: The uploaded file is not a valid ZIP file.")
@@ -84,14 +80,14 @@ def process_payment_zip_file(uploaded_zip_file):
         st.error(f"An unexpected error occurred during unzipping: {e}")
         return []
 
-    return payment_files
-
+    return payment_data # List of (string, string) tuples
 
 # --- 1. Data Processing Functions ---
 
 @st.cache_data(show_spinner="Processing Payment Files and Creating Financial Master...")
-def process_payment_files(uploaded_payment_files):
-    """Reads all uploaded TXT payment files, creates the financial summary (Net Sales, Fees, Tax/TCS) and raw breakdown."""
+# FIX 2: Now accepts the list of (content_str, file_name) tuples, which are hashable.
+def process_payment_files(uploaded_payment_data):
+    """Reads all payment file contents (passed as strings), creates the financial summary."""
     
     all_payment_data = []
     
@@ -102,9 +98,11 @@ def process_payment_files(uploaded_payment_files):
             'posted-date-time', 'order-item-code', 'merchant-order-item-id', 
             'merchant-adjustment-item-id', 'sku', 'quantity-purchased', 'promotion-id'] 
 
-    for file in uploaded_payment_files:
+    # Iterate over the list of (file_content_str, file_name) tuples
+    for file_content_str, file_name in uploaded_payment_data:
         try:
-            df_temp = pd.read_csv(io.StringIO(file.getvalue().decode("latin-1")), 
+            # Use io.StringIO directly with the content string
+            df_temp = pd.read_csv(io.StringIO(file_content_str), 
                                  sep='\t', 
                                  skipinitialspace=True,
                                  header=1)
@@ -115,7 +113,7 @@ def process_payment_files(uploaded_payment_files):
             
             all_payment_data.append(df_temp)
         except Exception as e:
-            st.error(f"Error reading {file.name} (Payment TXT): The file structure is unexpected. Details: {e}")
+            st.error(f"Error reading {file_name} (Payment TXT): The file structure is unexpected. Details: {e}")
             return pd.DataFrame(), pd.DataFrame()
     
     df_payment_raw = pd.concat(all_payment_data, ignore_index=True)
@@ -278,15 +276,16 @@ with st.sidebar:
 
 if payment_zip_file and mtr_files:
     # 1. Process the ZIP file for Payment reports
-    with st.spinner("Unzipping Payment files..."): # Added spinner for the uncached function
-        payment_files = process_payment_zip_file(payment_zip_file)
+    with st.spinner("Unzipping Payment files..."): 
+        # Call the modified function which returns hashable strings/tuples
+        payment_data_tuples = process_payment_zip_file(payment_zip_file)
     
-    if not payment_files:
+    if not payment_data_tuples:
         st.error("ZIP file processed, but no Payment (.txt) files found inside. Please check the contents of your ZIP file.")
         st.stop()
         
-    # 2. Process files
-    df_financial_master, df_payment_raw_breakdown = process_payment_files(payment_files)
+    # 2. Process files - Pass the hashable list of tuples to the cached function
+    df_financial_master, df_payment_raw_breakdown = process_payment_files(payment_data_tuples)
     df_logistics_master = process_mtr_files(mtr_files)
 
     # 3. Process Cost Sheet (only if uploaded)
