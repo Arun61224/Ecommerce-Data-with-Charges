@@ -497,14 +497,12 @@ if payment_zip_files and mtr_files:
 
         st.header("1. Item-Level Reconciliation Summary (MTR Details + Classified Charges)")
 
-      st.header("1. Item-Level Reconciliation Summary (MTR Details + Classified Charges)")
-        
         # Start with the full, sorted dataframe
         df_display = df_reconciliation.sort_values(by='OrderID', ascending=True).copy()
 
         # --- NEW GENERIC FILTERING SECTION ---
-        # List of columns that are good candidates for filtering
-        filter_cols = ['All', 'OrderID', 'Sku', 'Transaction Type', 'Ship From City', 'Ship To State']
+        # Columns that are suitable for filtering in the dashboard
+        filter_cols = ['All', 'OrderID', 'Sku', 'Transaction Type', 'Ship From City', 'Ship To State', 'Invoice Number']
 
         # 1. Select the Column to filter on
         selected_col = st.selectbox("👉 Select Column to Filter:", filter_cols)
@@ -527,8 +525,9 @@ if payment_zip_files and mtr_files:
                     # Filtering based on the selected column and value
                     df_display = df_display[column_data == selected_value].copy()
                 # If 'All' is selected, df_display remains the full sorted dataframe.
-        
+
         # --- END OF NEW GENERIC FILTERING SECTION ---
+
 
         # --- FIX: Scale down large numbers and apply number formatting ---
         column_config_dict = {}
@@ -599,4 +598,3 @@ if payment_zip_files and mtr_files:
 
 else:
     st.info("Please upload your **Payment Reports (.zip)** and **MTR Reports (.csv)** in the sidebar to start the reconciliation. The dashboard will appear automatically once files are uploaded.")
-
