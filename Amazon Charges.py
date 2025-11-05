@@ -30,6 +30,8 @@ def create_cost_sheet_template():
 # Uncached function
 def process_cost_sheet(uploaded_file):
     """Reads the uploaded cost sheet and prepares it for merging."""
+    required_cols = ['SKU', 'Product Cost']
+    
     try:
         filename = uploaded_file.name.lower()
         
@@ -43,6 +45,14 @@ def process_cost_sheet(uploaded_file):
             st.error(f"Error reading Cost Sheet ({uploaded_file.name}): Unsupported file type. Please upload .xlsx or .csv.")
             return pd.DataFrame()
         # --- END FIX ---
+        
+        # --- NEW FIX: Validate required columns in Cost Sheet ---
+        df_cost.columns = [str(col).strip() for col in df_cost.columns]
+        missing_cols = [col for col in required_cols if col not in df_cost.columns]
+        if missing_cols:
+             st.error(f"Cost Sheet Error: Missing required columns: {', '.join(missing_cols)}. Please check the file header.")
+             return pd.DataFrame()
+        # --- END NEW FIX ---
         
         df_cost.rename(columns={'SKU': 'Sku'}, inplace=True)
         df_cost['Sku'] = df_cost['Sku'].astype(str)
@@ -140,8 +150,16 @@ def process_payment_files(uploaded_payment_files):
 
     for file in uploaded_payment_files:
         try:
+            # --- NEW FIX: Explicitly handle decoding errors in getvalue() ---
+            try:
+                file_content = file.getvalue().decode("latin-1")
+            except Exception as decode_err:
+                 st.error(f"Payment TXT Decode Error in {file.name}: Could not decode file content. Ensure it's a standard TXT file. Details: {decode_err}")
+                 continue # Skip this file
+            # --- END NEW FIX ---
+            
             chunk_iter = pd.read_csv(
-                io.StringIO(file.getvalue().decode("latin-1")),
+                io.StringIO(file_content), # Use decoded content
                 sep='\t',
                 skipinitialspace=True,
                 header=0, # Assume header is on the FIRST line
@@ -261,10 +279,21 @@ def process_mtr_files(uploaded_mtr_files):
             for chunk in chunk_iter:
                 try:
                     chunk = chunk.loc[:, ~chunk.columns.str.contains('^Unnamed')]
+                    
+                    # --- NEW FIX: Standardize column names before checking required columns ---
+                    chunk.columns = [str(col).strip() for col in chunk.columns]
+                    # --- END NEW FIX ---
+
                     cols_to_keep = [col for col in required_mtr_cols if col in chunk.columns]
                     if cols_to_keep:
                         chunk_small = chunk[cols_to_keep].copy()
                         all_mtr_data.append(chunk_small)
+                    # --- NEW FIX: Check if all REQUIRED columns were found ---
+                    else:
+                         st.error(f"MTR Error in {file.name}: Could not find essential columns in MTR file like 'Order Id', 'Sku', 'Invoice Amount'. Please check the header row.")
+                         return pd.DataFrame()
+                    # --- END NEW FIX ---
+
                 except Exception as chunk_err:
                      st.warning(f"Skipping a section in {file.name} due to error: {chunk_err}")
                 finally:
@@ -272,6 +301,9 @@ def process_mtr_files(uploaded_mtr_files):
 
         except Exception as e:
             st.error(f"Error reading {file.name} (MTR CSV): {e}")
+            # --- NEW FIX: Return empty dataframe immediately on read error ---
+            return pd.DataFrame()
+            # --- END NEW FIX ---
 
     if not all_mtr_data:
         st.error("No valid MTR data could be processed from the CSV files.")
@@ -535,6 +567,11 @@ if payment_zip_files and mtr_files:
     if cost_file:
          with st.spinner("Processing Cost Sheet..."):
               df_cost_master = process_cost_sheet(cost_file)
+              
+         # If cost sheet failed to process, stop here
+         if df_cost_master.empty and cost_file:
+             st.stop()
+
 
     all_payment_file_objects = []
     with st.spinner("Unzipping Payment files..."):
@@ -547,9 +584,11 @@ if payment_zip_files and mtr_files:
         st.stop()
 
     with st.spinner("Processing Payment files... (This may take a while for large files)"):
+        # This function has robust error checks for required columns
         df_financial_master, df_payment_raw_breakdown = process_payment_files(all_payment_file_objects)
 
     with st.spinner("Processing MTR files... (This may take a while for large files)"):
+        # This function has robust error checks for required columns
         df_logistics_master = process_mtr_files(mtr_files)
 
     if df_financial_master.empty or df_logistics_master.empty:
