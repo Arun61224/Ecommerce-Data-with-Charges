@@ -39,8 +39,12 @@ def process_cost_sheet(uploaded_file):
         if filename.endswith(('.xlsx', '.xls')):
             df_cost = pd.read_excel(uploaded_file)
         elif filename.endswith(('.csv')):
-            # Using read_csv for CSV files
-            df_cost = pd.read_csv(uploaded_file)
+            # Using read_csv for CSV files, attempting common encodings
+            try:
+                df_cost = pd.read_csv(uploaded_file, encoding='utf-8')
+            except UnicodeDecodeError:
+                df_cost = pd.read_csv(uploaded_file, encoding='latin-1')
+            uploaded_file.seek(0) # Reset file pointer after reading
         else:
             st.error(f"Error reading Cost Sheet ({uploaded_file.name}): Unsupported file type. Please upload .xlsx or .csv.")
             return pd.DataFrame()
@@ -150,13 +154,22 @@ def process_payment_files(uploaded_payment_files):
 
     for file in uploaded_payment_files:
         try:
-            # --- NEW FIX: Explicitly handle decoding errors in getvalue() ---
+            # --- FIX: Try multiple encodings for robustness ---
+            file_content = None
             try:
-                file_content = file.getvalue().decode("latin-1")
-            except Exception as decode_err:
-                 st.error(f"Payment TXT Decode Error in {file.name}: Could not decode file content. Ensure it's a standard TXT file. Details: {decode_err}")
-                 continue # Skip this file
-            # --- END NEW FIX ---
+                # 1. Try UTF-8 (Most common standard)
+                file_content = file.getvalue().decode("utf-8")
+            except UnicodeDecodeError:
+                try:
+                    # 2. Try Latin-1 (Amazon's common format)
+                    file_content = file.getvalue().decode("latin-1")
+                except Exception as decode_err:
+                     st.error(f"Payment TXT Decode Error in {file.name}: Could not decode file content using UTF-8 or Latin-1. Please check file encoding. Details: {decode_err}")
+                     continue # Skip this file
+            
+            if file_content is None:
+                continue
+            # --- END FIX ---
             
             chunk_iter = pd.read_csv(
                 io.StringIO(file_content), # Use decoded content
@@ -586,6 +599,10 @@ if payment_zip_files and mtr_files:
     with st.spinner("Processing Payment files... (This may take a while for large files)"):
         # This function has robust error checks for required columns
         df_financial_master, df_payment_raw_breakdown = process_payment_files(all_payment_file_objects)
+        
+        # If payment processing failed, stop here
+        if df_financial_master.empty:
+            st.stop()
 
     with st.spinner("Processing MTR files... (This may take a while for large files)"):
         # This function has robust error checks for required columns
