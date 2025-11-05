@@ -471,6 +471,7 @@ with col_exp_input1:
         min_value=0.0,
         value=0.0,
         step=100.0,
+        key='storage_fee_key', # Added Key
         help="Enter the total FBA/Other Storage fee for the period."
     )
 
@@ -481,6 +482,7 @@ with col_exp_input2:
         min_value=0.0,
         value=0.0,
         step=100.0,
+        key='ads_spends_key', # Added Key
         help="Enter the total advertising spends for the period."
     )
 
@@ -492,6 +494,7 @@ with col_exp_input3:
         min_value=0.0,
         value=0.0,
         step=1000.0,
+        key='total_salary_key', # Added Key
         help="Enter the total staff salary for the month."
     )
 
@@ -502,6 +505,7 @@ with col_exp_input4:
         min_value=0.0,
         value=0.0,
         step=100.0,
+        key='miscellaneous_expenses_key', # Added Key
         help="Enter any other miscellaneous monthly expenses."
     )
 # --- END NEW EXPENSES ---
@@ -550,6 +554,15 @@ if payment_zip_files and mtr_files:
          st.error("Failed to create the final reconciliation report. Please review the processing steps and input files.")
          st.stop()
 
+    # --- INITIALIZE EXCEL DATA FOR DOWNLOAD BUTTON ---
+    excel_data = None 
+    try:
+        # Generate Excel data inside the try block where df_reconciliation is available
+        excel_data = convert_to_excel(df_reconciliation)
+    except Exception as excel_err:
+        st.error(f"Error generating Excel data for download: {excel_err}")
+        # Setting excel_data to a dummy value so the download button doesn't crash the app
+        excel_data = io.BytesIO(b"Error generating file.")
 
     # --- Dashboard Display ---
     try:
@@ -668,14 +681,14 @@ if payment_zip_files and mtr_files:
         st.header("2. Download Full Reconciliation Report")
         st.info("The Excel file will contain a single sheet with Item Details, Classified Charges, and Profit Calculation.")
 
-        excel_data = convert_to_excel(df_reconciliation) # Use original unscaled data
-
-        st.download_button(
-            label="Download Full Excel Report (Reconciliation Summary)",
-            data=excel_data,
-            file_name='amazon_reconciliation_summary.xlsx',
-            mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-        )
+        # Ensure excel_data is not None before displaying the button
+        if excel_data:
+            st.download_button(
+                label="Download Full Excel Report (Reconciliation Summary)",
+                data=excel_data,
+                file_name='amazon_reconciliation_summary.xlsx',
+                mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+            )
 
     except Exception as display_err:
         st.error(f"An error occurred while displaying the dashboard: {display_err}")
