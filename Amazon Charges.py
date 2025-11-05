@@ -413,12 +413,12 @@ def create_final_reconciliation_df(df_financial_master, df_logistics_master, df_
     return df_final
 
 
-# --- 2. File Upload Section ---
+# --- 2. File Upload Section (SIDEBAR) ---
 
 with st.sidebar:
     st.header("Upload Raw Data Files")
 
-    st.subheader("Cost Sheet (Optional)")
+    st.subheader("Cost Sheet (Mandatory)")
 
     excel_template = create_cost_sheet_template()
     st.download_button(
@@ -450,35 +450,46 @@ with st.sidebar:
     )
     st.markdown("---")
     
-    # --- NEW SECTION FOR OTHER EXPENSES ---
-    st.subheader("Other Monthly Expenses (Optional)")
-    
-    # Storage Fee Input
-    storage_fee = st.number_input(
-        "4. Monthly Storage Fee (INR)",
-        min_value=0.0,
-        value=0.0,
-        step=100.0,
-        help="Enter the total FBA/Other Storage fee for the period."
-    )
-    
-    # Ads Spends Input
-    ads_spends = st.number_input(
-        "5. Monthly Advertising Spends (INR)",
-        min_value=0.0,
-        value=0.0,
-        step=100.0,
-        help="Enter the total advertising spends for the period."
-    )
-    # --- END NEW SECTION ---
+# --- 2b. Other Monthly Expenses (MAIN PAGE - MANDATORY) ---
+# Inputs moved to main page outside the 'if payment_zip_files and mtr_files:' block 
+# so they are always visible and available.
 
 
 # --- 3. Main Logic Execution ---
 
 # Initialize expense variables here to prevent NameError in the KPI display block
 # when files haven't been uploaded yet (i.e., when Streamlit first runs).
+# Define them outside the conditional blocks.
+
+st.subheader("4. Other Monthly Expenses (Mandatory Inputs)")
+col_exp_input1, col_exp_input2 = st.columns(2)
+
+with col_exp_input1:
+    # Storage Fee Input
+    storage_fee = st.number_input(
+        "Monthly Storage Fee (INR)",
+        min_value=0.0,
+        value=0.0,
+        step=100.0,
+        help="Enter the total FBA/Other Storage fee for the period."
+    )
+
+with col_exp_input2:
+    # Ads Spends Input
+    ads_spends = st.number_input(
+        "Monthly Advertising Spends (INR)",
+        min_value=0.0,
+        value=0.0,
+        step=100.0,
+        help="Enter the total advertising spends for the period."
+    )
+
+st.markdown("---")
+
+# Pre-calculate expenses for the 'else' block
 total_other_expenses = storage_fee + ads_spends
 total_profit_final = 0.0
+
 
 if payment_zip_files and mtr_files:
 
@@ -539,9 +550,6 @@ if payment_zip_files and mtr_files:
         # Calculate Profit Before Other Expenses
         total_profit_before_others = df_reconciliation['Product Profit/Loss'].sum() if 'Product Profit/Loss' in df_reconciliation.columns else 0
         
-        # Calculate Total Other Expenses
-        total_other_expenses = storage_fee + ads_spends
-
         # Calculate Final Profit (After Other Expenses)
         total_profit_final = total_profit_before_others - total_other_expenses
         # -----------------------------------------------
