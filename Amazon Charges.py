@@ -446,6 +446,28 @@ with st.sidebar:
         accept_multiple_files=True
     )
     st.markdown("---")
+    
+    # --- NEW SECTION FOR OTHER EXPENSES ---
+    st.subheader("Other Monthly Expenses (Optional)")
+    
+    # Storage Fee Input
+    storage_fee = st.number_input(
+        "4. Monthly Storage Fee (INR)",
+        min_value=0.0,
+        value=0.0,
+        step=100.0,
+        help="Enter the total FBA/Other Storage fee for the period."
+    )
+    
+    # Ads Spends Input
+    ads_spends = st.number_input(
+        "5. Monthly Advertising Spends (INR)",
+        min_value=0.0,
+        value=0.0,
+        step=100.0,
+        help="Enter the total advertising spends for the period."
+    )
+    # --- END NEW SECTION ---
 
 
 # --- 3. Main Logic Execution ---
@@ -506,18 +528,34 @@ if payment_zip_files and mtr_files:
             total_product_cost = (cost * quantity).sum()
         else: total_product_cost = 0
 
-        total_profit = df_reconciliation['Product Profit/Loss'].sum() if 'Product Profit/Loss' in df_reconciliation.columns else 0
+        # Calculate Profit Before Other Expenses
+        total_profit_before_others = df_reconciliation['Product Profit/Loss'].sum() if 'Product Profit/Loss' in df_reconciliation.columns else 0
+        
+        # Calculate Total Other Expenses
+        total_other_expenses = storage_fee + ads_spends
+
+        # Calculate Final Profit (After Other Expenses)
+        total_profit_final = total_profit_before_others - total_other_expenses
+        # -----------------------------------------------
 
         st.subheader("Key Business Metrics (Based on Item Reconciliation)")
         col_kpi1, col_kpi2, col_kpi3, col_kpi4, col_kpi5, col_kpi6 = st.columns(6)
-
+        
         col_kpi1.metric("Total Items", f"{total_items:,}")
         col_kpi2.metric("Total Net Payment", f"INR {total_payment_fetched:,.2f}")
         col_kpi3.metric("Total MTR Invoiced", f"INR {total_mtr_billed:,.2f}")
         col_kpi4.metric("Total Amazon Fees", f"INR {total_fees:.2f}")
         col_kpi5.metric("Total Product Cost", f"INR {total_product_cost:,.2f}")
-        col_kpi6.metric("TOTAL PROFIT/LOSS", f"INR {total_profit:,.2f}",
-                         delta=f"Tax/TCS: INR {total_tax:.2f}")
+        
+        # Display Final Profit/Loss (Adjusted)
+        col_kpi6.metric("TOTAL PROFIT/LOSS (Final)", f"INR {total_profit_final:,.2f}",
+                         delta=f"Other Expenses: INR {total_other_expenses:,.2f}")
+        
+        # Display Other Expenses separately below KPIs
+        col_exp1, col_exp2 = st.columns(2)
+        col_exp1.metric("Storage Fee", f"INR {storage_fee:,.2f}")
+        col_exp2.metric("Ads Spends", f"INR {ads_spends:,.2f}")
+
 
         st.markdown("---")
 
