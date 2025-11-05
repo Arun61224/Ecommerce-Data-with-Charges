@@ -464,47 +464,67 @@ st.subheader("4. Other Monthly Expenses (Mandatory Inputs)")
 col_exp_input1, col_exp_input2 = st.columns(2)
 col_exp_input3, col_exp_input4 = st.columns(2)
 
-with col_exp_input1:
-    # Storage Fee Input
-    storage_fee = st.number_input(
-        "Monthly Storage Fee (INR)",
-        min_value=0.0,
-        value=0.0,
-        step=100.0,
-        help="Enter the total FBA/Other Storage fee for the period."
-    )
 
-with col_exp_input2:
-    # Ads Spends Input
-    ads_spends = st.number_input(
-        "Monthly Advertising Spends (INR)",
-        min_value=0.0,
-        value=0.0,
-        step=100.0,
-        help="Enter the total advertising spends for the period."
-    )
+# --- NEW TEXT INPUTS WITH ON-ENTER BEHAVIOR ---
 
-# --- NEW EXPENSES ---
-with col_exp_input3:
-    # Total Salary Input
-    total_salary = st.number_input(
-        "Total Salary (INR)",
-        min_value=0.0,
-        value=0.0,
-        step=1000.0,
-        help="Enter the total staff salary for the month."
-    )
+# Helper function to safely convert text input to float
+def safe_float_input(label, default_value, help_text):
+    text_value = col_exp_input1.text_input(label, value=str(default_value), help=help_text, key=f"input_{label}")
+    try:
+        return float(text_value)
+    except ValueError:
+        st.warning(f"Please enter a valid number for {label}. Using 0.0 temporarily.")
+        return 0.0
 
-with col_exp_input4:
-    # Miscellaneous Expenses Input
-    miscellaneous_expenses = st.number_input(
-        "Miscellaneous Expenses (INR)",
-        min_value=0.0,
-        value=0.0,
-        step=100.0,
-        help="Enter any other miscellaneous monthly expenses."
-    )
-# --- END NEW EXPENSES ---
+# Storage Fee Input (Column 1)
+storage_fee_text = col_exp_input1.text_input(
+    "Monthly Storage Fee (INR)",
+    value="0.0",
+    help="Enter the total FBA/Other Storage fee for the period and press Enter.",
+    key="storage_fee_input"
+)
+try:
+    storage_fee = float(storage_fee_text)
+except ValueError:
+    storage_fee = 0.0
+
+# Ads Spends Input (Column 2)
+ads_spends_text = col_exp_input2.text_input(
+    "Monthly Advertising Spends (INR)",
+    value="0.0",
+    help="Enter the total advertising spends for the period and press Enter.",
+    key="ads_spends_input"
+)
+try:
+    ads_spends = float(ads_spends_text)
+except ValueError:
+    ads_spends = 0.0
+
+# Total Salary Input (Column 3)
+total_salary_text = col_exp_input3.text_input(
+    "Total Salary (INR)",
+    value="0.0",
+    help="Enter the total staff salary for the month and press Enter.",
+    key="total_salary_input"
+)
+try:
+    total_salary = float(total_salary_text)
+except ValueError:
+    total_salary = 0.0
+
+# Miscellaneous Expenses Input (Column 4)
+miscellaneous_expenses_text = col_exp_input4.text_input(
+    "Miscellaneous Expenses (INR)",
+    value="0.0",
+    help="Enter any other miscellaneous monthly expenses and press Enter.",
+    key="miscellaneous_expenses_input"
+)
+try:
+    miscellaneous_expenses = float(miscellaneous_expenses_text)
+except ValueError:
+    miscellaneous_expenses = 0.0
+    
+# --- END NEW TEXT INPUTS ---
 
 st.markdown("---")
 
