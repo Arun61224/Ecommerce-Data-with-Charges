@@ -31,7 +31,19 @@ def create_cost_sheet_template():
 def process_cost_sheet(uploaded_file):
     """Reads the uploaded cost sheet and prepares it for merging."""
     try:
-        df_cost = pd.read_excel(uploaded_file)
+        filename = uploaded_file.name.lower()
+        
+        # --- FIX: Check file extension and use appropriate reader ---
+        if filename.endswith(('.xlsx', '.xls')):
+            df_cost = pd.read_excel(uploaded_file)
+        elif filename.endswith(('.csv')):
+            # Using read_csv for CSV files
+            df_cost = pd.read_csv(uploaded_file)
+        else:
+            st.error(f"Error reading Cost Sheet ({uploaded_file.name}): Unsupported file type. Please upload .xlsx or .csv.")
+            return pd.DataFrame()
+        # --- END FIX ---
+        
         df_cost.rename(columns={'SKU': 'Sku'}, inplace=True)
         df_cost['Sku'] = df_cost['Sku'].astype(str)
         df_cost['Product Cost'] = pd.to_numeric(df_cost['Product Cost'], errors='coerce').fillna(0)
@@ -40,7 +52,7 @@ def process_cost_sheet(uploaded_file):
 
         return df_cost_master
     except Exception as e:
-        st.error(f"Error reading Cost Sheet ({uploaded_file.name}): Please ensure the file is an Excel file with 'SKU' and 'Product Cost' columns. Details: {e}")
+        st.error(f"Error reading Cost Sheet ({uploaded_file.name}): Please ensure the file is correctly formatted with 'SKU' and 'Product Cost' columns. Details: {e}")
         return pd.DataFrame()
 
 @st.cache_data
@@ -429,8 +441,8 @@ with st.sidebar:
     )
 
     cost_file = st.file_uploader(
-        "1. Upload Product Cost Sheet (.xlsx)",
-        type=['xlsx'],
+        "1. Upload Product Cost Sheet (.xlsx or .csv)",
+        type=['xlsx', 'csv'],
     )
 
     st.markdown("---")
