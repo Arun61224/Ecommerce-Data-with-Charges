@@ -475,6 +475,11 @@ with st.sidebar:
 
 # --- 3. Main Logic Execution ---
 
+# Initialize expense variables here to prevent NameError in the KPI display block
+# when files haven't been uploaded yet (i.e., when Streamlit first runs).
+total_other_expenses = storage_fee + ads_spends
+total_profit_final = 0.0
+
 if payment_zip_files and mtr_files:
 
     df_cost_master = pd.DataFrame()
@@ -646,4 +651,21 @@ if payment_zip_files and mtr_files:
 
 
 else:
+    # If files are not uploaded, display the Other Expenses metrics with current input values
+    total_other_expenses = storage_fee + ads_spends
+    total_profit_final = -total_other_expenses # Profit is just negative of expenses if no sales data
+    
+    st.subheader("Current Other Expenses Input (No Sales Data)")
+    
+    col_kpi1, col_kpi2, col_kpi3, col_kpi4, col_kpi5, col_kpi6 = st.columns(6)
+    
+    col_kpi6.metric("TOTAL PROFIT/LOSS (Final)", f"INR {total_profit_final:,.2f}",
+                     delta=f"Other Expenses: INR {total_other_expenses:,.2f}")
+    
+    col_exp1, col_exp2 = st.columns(2)
+    col_exp1.metric("Storage Fee", f"INR {storage_fee:,.2f}")
+    col_exp2.metric("Ads Spends", f"INR {ads_spends:,.2f}")
+    
+    st.markdown("---")
+
     st.info("Please upload your **Payment Reports (.zip)** and **MTR Reports (.csv)** in the sidebar to start the reconciliation. The dashboard will appear automatically once files are uploaded.")
