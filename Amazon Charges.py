@@ -497,18 +497,38 @@ if payment_zip_files and mtr_files:
 
         st.header("1. Item-Level Reconciliation Summary (MTR Details + Classified Charges)")
 
-        if 'OrderID' in df_reconciliation.columns:
-            order_id_list = ['All Orders'] + sorted(df_reconciliation['OrderID'].unique().tolist())
-            selected_order_id = st.selectbox("👉 Select Order ID to Filter Summary:", order_id_list)
+      st.header("1. Item-Level Reconciliation Summary (MTR Details + Classified Charges)")
+        
+        # Start with the full, sorted dataframe
+        df_display = df_reconciliation.sort_values(by='OrderID', ascending=True).copy()
 
-            if selected_order_id != 'All Orders':
-                df_display = df_reconciliation[df_reconciliation['OrderID'] == selected_order_id].copy()
-            else:
-                df_display = df_reconciliation.sort_values(by='OrderID', ascending=True).copy()
-        else:
-             st.warning("OrderID column not found. Displaying all data.")
-             df_display = df_reconciliation.copy()
+        # --- NEW GENERIC FILTERING SECTION ---
+        # List of columns that are good candidates for filtering
+        filter_cols = ['All', 'OrderID', 'Sku', 'Transaction Type', 'Ship From City', 'Ship To State']
 
+        # 1. Select the Column to filter on
+        selected_col = st.selectbox("👉 Select Column to Filter:", filter_cols)
+
+        if selected_col != 'All':
+            # Ensure the selected column exists and is not entirely empty
+            if selected_col in df_display.columns and not df_display[selected_col].empty:
+
+                # Convert the column to string for consistent display in the dropdown
+                column_data = df_display[selected_col].astype(str)
+
+                # 2. Get unique values for the selected column
+                unique_values = ['All'] + sorted(column_data.unique().tolist())
+
+                # 3. Select the specific value to filter
+                selected_value = st.selectbox(f"Filter by **{selected_col}** value:", unique_values)
+
+                # 4. Apply the filter
+                if selected_value != 'All':
+                    # Filtering based on the selected column and value
+                    df_display = df_display[column_data == selected_value].copy()
+                # If 'All' is selected, df_display remains the full sorted dataframe.
+        
+        # --- END OF NEW GENERIC FILTERING SECTION ---
 
         # --- FIX: Scale down large numbers and apply number formatting ---
         column_config_dict = {}
@@ -579,3 +599,4 @@ if payment_zip_files and mtr_files:
 
 else:
     st.info("Please upload your **Payment Reports (.zip)** and **MTR Reports (.csv)** in the sidebar to start the reconciliation. The dashboard will appear automatically once files are uploaded.")
+
