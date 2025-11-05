@@ -457,10 +457,7 @@ with st.sidebar:
 
 # --- 3. Main Logic Execution ---
 
-# Initialize expense variables here to prevent NameError in the KPI display block
-# when files haven't been uploaded yet (i.e., when Streamlit first runs).
-# Define them outside the conditional blocks.
-
+# Define and display inputs first.
 st.subheader("4. Other Monthly Expenses (Mandatory Inputs)")
 col_exp_input1, col_exp_input2 = st.columns(2)
 
@@ -486,10 +483,8 @@ with col_exp_input2:
 
 st.markdown("---")
 
-# Pre-calculate expenses for the 'else' block
-total_other_expenses = storage_fee + ads_spends
-total_profit_final = 0.0
-
+# Removed pre-calculation of expenses here. Expenses will be calculated explicitly 
+# inside the if/else blocks to ensure proper state management during reruns.
 
 if payment_zip_files and mtr_files:
 
@@ -549,6 +544,9 @@ if payment_zip_files and mtr_files:
 
         # Calculate Profit Before Other Expenses
         total_profit_before_others = df_reconciliation['Product Profit/Loss'].sum() if 'Product Profit/Loss' in df_reconciliation.columns else 0
+        
+        # Calculate Total Other Expenses
+        total_other_expenses = storage_fee + ads_spends # Calculate here explicitly
         
         # Calculate Final Profit (After Other Expenses)
         total_profit_final = total_profit_before_others - total_other_expenses
