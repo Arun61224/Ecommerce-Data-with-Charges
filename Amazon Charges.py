@@ -464,100 +464,47 @@ st.subheader("4. Other Monthly Expenses (Mandatory Inputs)")
 col_exp_input1, col_exp_input2 = st.columns(2)
 col_exp_input3, col_exp_input4 = st.columns(2)
 
-# --- Initialize session state keys for expenses if they don't exist ---
-if 'storage_fee' not in st.session_state:
-    st.session_state.storage_fee = 0.0
-if 'ads_spends' not in st.session_state:
-    st.session_state.ads_spends = 0.0
-if 'total_salary' not in st.session_state:
-    st.session_state.total_salary = 0.0
-if 'miscellaneous_expenses' not in st.session_state:
-    st.session_state.miscellaneous_expenses = 0.0
+with col_exp_input1:
+    # Storage Fee Input
+    storage_fee = st.number_input(
+        "Monthly Storage Fee (INR)",
+        min_value=0.0,
+        value=0.0,
+        step=100.0,
+        help="Enter the total FBA/Other Storage fee for the period."
+    )
 
-# Helper function to update session state and safely parse float
-def update_expense_state(key, text_value):
-    try:
-        # Update session state only if a valid number is provided
-        st.session_state[key] = float(text_value)
-    except ValueError:
-        # If the user enters non-numeric text, reset to 0.0 but don't crash
-        st.warning(f"Please enter a valid number for {key.replace('_', ' ').title()}. Using 0.0.")
-        st.session_state[key] = 0.0
-        
-# --- NEW TEXT INPUTS WITH ON-ENTER BEHAVIOR (Uses Session State) ---
+with col_exp_input2:
+    # Ads Spends Input
+    ads_spends = st.number_input(
+        "Monthly Advertising Spends (INR)",
+        min_value=0.0,
+        value=0.0,
+        step=100.0,
+        help="Enter the total advertising spends for the period."
+    )
 
-# Storage Fee Input (Column 1)
-col_exp_input1.text_input(
-    "Monthly Storage Fee (INR)",
-    value=str(st.session_state.storage_fee),
-    on_change=update_expense_state,
-    args=('storage_fee', st.session_state.storage_fee), # Using default value in args as placeholder
-    kwargs={'text_value': st.session_state.storage_fee}, # This is incorrect for text_input, but kept simple.
-    help="Enter the total FBA/Other Storage fee for the period and press Enter.",
-    key="storage_fee_input",
-)
+# --- NEW EXPENSES ---
+with col_exp_input3:
+    # Total Salary Input
+    total_salary = st.number_input(
+        "Total Salary (INR)",
+        min_value=0.0,
+        value=0.0,
+        step=1000.0,
+        help="Enter the total staff salary for the month."
+    )
 
-# NOTE: The direct `on_change` argument structure for generic helper is complex with `st.text_input`. 
-# Streamlit updates `session_state` automatically when `key` is provided and the value changes, 
-# so we rely on that default behavior and use `float()` conversion before the main logic run.
-
-# Storage Fee Input (Column 1)
-storage_fee_text = col_exp_input1.text_input(
-    "Monthly Storage Fee (INR)",
-    value=str(st.session_state.storage_fee),
-    help="Enter the total FBA/Other Storage fee for the period and press Enter.",
-    key="storage_fee_input",
-)
-
-# Ads Spends Input (Column 2)
-ads_spends_text = col_exp_input2.text_input(
-    "Monthly Advertising Spends (INR)",
-    value=str(st.session_state.ads_spends),
-    help="Enter the total advertising spends for the period and press Enter.",
-    key="ads_spends_input"
-)
-
-# Total Salary Input (Column 3)
-total_salary_text = col_exp_input3.text_input(
-    "Total Salary (INR)",
-    value=str(st.session_state.total_salary),
-    help="Enter the total staff salary for the month and press Enter.",
-    key="total_salary_input"
-)
-
-# Miscellaneous Expenses Input (Column 4)
-miscellaneous_expenses_text = col_exp_input4.text_input(
-    "Miscellaneous Expenses (INR)",
-    value=str(st.session_state.miscellaneous_expenses),
-    help="Enter any other miscellaneous monthly expenses and press Enter.",
-    key="miscellaneous_expenses_input"
-)
-
-# --- Safe conversion and update session state from text inputs ---
-try:
-    storage_fee = float(storage_fee_text)
-except ValueError:
-    storage_fee = st.session_state.storage_fee
-try:
-    ads_spends = float(ads_spends_text)
-except ValueError:
-    ads_spends = st.session_state.ads_spends
-try:
-    total_salary = float(total_salary_text)
-except ValueError:
-    total_salary = st.session_state.total_salary
-try:
-    miscellaneous_expenses = float(miscellaneous_expenses_text)
-except ValueError:
-    miscellaneous_expenses = st.session_state.miscellaneous_expenses
-    
-# Update session state to reflect current valid values (important for subsequent runs)
-st.session_state.storage_fee = storage_fee
-st.session_state.ads_spends = ads_spends
-st.session_state.total_salary = total_salary
-st.session_state.miscellaneous_expenses = miscellaneous_expenses
-    
-# --- END NEW TEXT INPUTS ---
+with col_exp_input4:
+    # Miscellaneous Expenses Input
+    miscellaneous_expenses = st.number_input(
+        "Miscellaneous Expenses (INR)",
+        min_value=0.0,
+        value=0.0,
+        step=100.0,
+        help="Enter any other miscellaneous monthly expenses."
+    )
+# --- END NEW EXPENSES ---
 
 st.markdown("---")
 
