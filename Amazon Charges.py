@@ -374,23 +374,26 @@ def create_final_reconciliation_df(df_financial_master, df_logistics_master, df_
         
         # 1. Define conditions for numpy.select
         conditions = [
+            # Condition 1: Refund or Free Replacement
             standardized_transaction_type.isin(refund_keywords),
+            # Condition 2: Cancel
             standardized_transaction_type.str.contains('|'.join(cancel_keywords), na=False) 
         ]
         
         # 2. Define resulting values (cost calculation)
-        # Result 1: Negative Half (-50%) for Refunds
+        # Result 1: Negative Half (-50%) for Refunds (Based on SKU's cost)
         refund_cost_value = -0.5 * df_final['Product Cost']
         
-        # Result 2: Negative 80% (-80%) for Cancels
+        # Result 2: Negative 80% (-80%) for Cancels (Based on SKU's cost)
         cancel_cost_value = -0.8 * df_final['Product Cost']
         
         choices = [
-            refund_cost_value, # If condition 1 (refund) is True
-            cancel_cost_value  # If condition 2 (cancel) is True
+            refund_cost_value, 
+            cancel_cost_value  
         ]
         
         # 3. Apply changes: If neither is true, keep original 'Product Cost'
+        # The cost is already merged via SKU, so this logic ensures the cost adjustment is independent of OrderID linkage.
         df_final['Product Cost'] = np.select(
             conditions, 
             choices, 
