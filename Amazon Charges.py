@@ -459,7 +459,10 @@ with st.sidebar:
 
 # Define and display inputs first.
 st.subheader("4. Other Monthly Expenses (Mandatory Inputs)")
+
+# Split into two rows of two columns each (4 columns total for 4 inputs)
 col_exp_input1, col_exp_input2 = st.columns(2)
+col_exp_input3, col_exp_input4 = st.columns(2)
 
 with col_exp_input1:
     # Storage Fee Input
@@ -481,10 +484,30 @@ with col_exp_input2:
         help="Enter the total advertising spends for the period."
     )
 
+# --- NEW EXPENSES ---
+with col_exp_input3:
+    # Total Salary Input
+    total_salary = st.number_input(
+        "Total Salary (INR)",
+        min_value=0.0,
+        value=0.0,
+        step=1000.0,
+        help="Enter the total staff salary for the month."
+    )
+
+with col_exp_input4:
+    # Miscellaneous Expenses Input
+    miscellaneous_expenses = st.number_input(
+        "Miscellaneous Expenses (INR)",
+        min_value=0.0,
+        value=0.0,
+        step=100.0,
+        help="Enter any other miscellaneous monthly expenses."
+    )
+# --- END NEW EXPENSES ---
+
 st.markdown("---")
 
-# Removed pre-calculation of expenses here. Expenses will be calculated explicitly 
-# inside the if/else blocks to ensure proper state management during reruns.
 
 if payment_zip_files and mtr_files:
 
@@ -545,8 +568,8 @@ if payment_zip_files and mtr_files:
         # Calculate Profit Before Other Expenses
         total_profit_before_others = df_reconciliation['Product Profit/Loss'].sum() if 'Product Profit/Loss' in df_reconciliation.columns else 0
         
-        # Calculate Total Other Expenses
-        total_other_expenses = storage_fee + ads_spends # Calculate here explicitly
+        # Calculate Total Other Expenses (Now includes Salary and Miscellaneous)
+        total_other_expenses = storage_fee + ads_spends + total_salary + miscellaneous_expenses 
         
         # Calculate Final Profit (After Other Expenses)
         total_profit_final = total_profit_before_others - total_other_expenses
@@ -566,9 +589,12 @@ if payment_zip_files and mtr_files:
                          delta=f"Other Expenses: INR {total_other_expenses:,.2f}")
         
         # Display Other Expenses separately below KPIs
-        col_exp1, col_exp2 = st.columns(2)
+        st.markdown("**Monthly Expenses Breakdown:**")
+        col_exp1, col_exp2, col_exp3, col_exp4 = st.columns(4)
         col_exp1.metric("Storage Fee", f"INR {storage_fee:,.2f}")
         col_exp2.metric("Ads Spends", f"INR {ads_spends:,.2f}")
+        col_exp3.metric("Total Salary", f"INR {total_salary:,.2f}")
+        col_exp4.metric("Miscellaneous Expenses", f"INR {miscellaneous_expenses:,.2f}")
 
 
         st.markdown("---")
@@ -658,7 +684,7 @@ if payment_zip_files and mtr_files:
 
 else:
     # If files are not uploaded, display the Other Expenses metrics with current input values
-    total_other_expenses = storage_fee + ads_spends
+    total_other_expenses = storage_fee + ads_spends + total_salary + miscellaneous_expenses
     total_profit_final = -total_other_expenses # Profit is just negative of expenses if no sales data
     
     st.subheader("Current Other Expenses Input (No Sales Data)")
@@ -668,9 +694,12 @@ else:
     col_kpi6.metric("TOTAL PROFIT/LOSS (Final)", f"INR {total_profit_final:,.2f}",
                      delta=f"Other Expenses: INR {total_other_expenses:,.2f}")
     
-    col_exp1, col_exp2 = st.columns(2)
+    st.markdown("**Monthly Expenses Breakdown:**")
+    col_exp1, col_exp2, col_exp3, col_exp4 = st.columns(4)
     col_exp1.metric("Storage Fee", f"INR {storage_fee:,.2f}")
     col_exp2.metric("Ads Spends", f"INR {ads_spends:,.2f}")
+    col_exp3.metric("Total Salary", f"INR {total_salary:,.2f}")
+    col_exp4.metric("Miscellaneous Expenses", f"INR {miscellaneous_expenses:,.2f}")
     
     st.markdown("---")
 
