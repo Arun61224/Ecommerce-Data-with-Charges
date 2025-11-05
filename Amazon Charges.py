@@ -363,14 +363,40 @@ def create_final_reconciliation_df(df_financial_master, df_logistics_master, df_
     df_final['Product Cost'] = pd.to_numeric(df_final['Product Cost'], errors='coerce').fillna(0)
 
 
-    refund_types_lower = ['cancel refund', 'freereplacement', 'refund', 'cancel']
+    # Define transaction type categories
+    refund_keywords = ['refund', 'freereplacement'] # Refund or Free Replacement
+    cancel_keywords = ['cancel'] # Cancel
+
     if 'Transaction Type' in df_final.columns:
         standardized_transaction_type = df_final['Transaction Type'].astype(str).str.strip().str.lower()
-        df_final['Product Cost'] = np.where(
-            standardized_transaction_type.isin(refund_types_lower),
-            0,
-            df_final['Product Cost']
+        
+        # --- MODIFICATION: Apply conditional cost based on transaction type ---
+        
+        # 1. Define conditions for numpy.select
+        conditions = [
+            standardized_transaction_type.isin(refund_keywords),
+            standardized_transaction_type.str.contains('|'.join(cancel_keywords), na=False) 
+        ]
+        
+        # 2. Define resulting values (cost calculation)
+        # Result 1: Negative Half (-50%) for Refunds
+        refund_cost_value = -0.5 * df_final['Product Cost']
+        
+        # Result 2: Negative 80% (-80%) for Cancels
+        cancel_cost_value = -0.8 * df_final['Product Cost']
+        
+        choices = [
+            refund_cost_value, # If condition 1 (refund) is True
+            cancel_cost_value  # If condition 2 (cancel) is True
+        ]
+        
+        # 3. Apply changes: If neither is true, keep original 'Product Cost'
+        df_final['Product Cost'] = np.select(
+            conditions, 
+            choices, 
+            default=df_final['Product Cost']
         )
+        # --------------------------------------------------------------------
 
     df_final['Net Payment'] = pd.to_numeric(df_final['Net Payment'], errors='coerce').fillna(0)
     df_final['Quantity'] = pd.to_numeric(df_final['Quantity'], errors='coerce').fillna(1).astype(int)
