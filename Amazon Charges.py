@@ -689,11 +689,17 @@ else:
     
     st.subheader("Current Other Expenses Input (No Sales Data)")
     
-    col_kpi1, col_kpi2, col_kpi3, col_kpi4, col_kpi5, col_kpi6 = st.columns(6)
+    # Using only two columns for the main KPI when no data is loaded to prevent layout conflicts (Fix for 'Oh no' error)
+    col_kpi_sum, col_kpi_exp = st.columns(2)
     
-    col_kpi6.metric("TOTAL PROFIT/LOSS (Final)", f"INR {total_profit_final:,.2f}",
-                     delta=f"Other Expenses: INR {total_other_expenses:,.2f}")
+    with col_kpi_sum:
+        st.metric("TOTAL PROFIT/LOSS (Expected)", f"INR {total_profit_final:,.2f}")
     
+    with col_kpi_exp:
+         st.metric("Total Expenses Input", f"INR {total_other_expenses:,.2f}")
+
+
+    st.markdown("---")
     st.markdown("**Monthly Expenses Breakdown:**")
     col_exp1, col_exp2, col_exp3, col_exp4 = st.columns(4)
     col_exp1.metric("Storage Fee", f"INR {storage_fee:,.2f}")
