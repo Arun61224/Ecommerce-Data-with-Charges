@@ -263,8 +263,8 @@ def create_final_reconciliation_df(df_financial_master, df_logistics_master, df_
             ttype.str.contains('cancel')
         ]
         choices = [
-            -0.5 * df_final['Product Cost'], # Refund Cost
-            -0.8 * df_final['Product Cost']  # Cancel Cost
+            -0.2 * df_final['Product Cost'], # Refund Cost
+            -0.2 * df_final['Product Cost']  # Cancel Cost
         ]
         
         df_final['Product Cost'] = np.select(conditions, choices, default=df_final['Product Cost'])
@@ -452,3 +452,4 @@ else:
     st.subheader("Expenses Summary (No Files Uploaded)")
     st.metric("Total Expenses Input", f"₹ {total_expenses:,.2f}")
     st.info("👈 Please upload Cost Sheet, Payment Zips, and MTR CSVs in the sidebar.")
+
