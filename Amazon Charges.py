@@ -7,7 +7,7 @@ import gc # Garbage collection to free up memory
 
 # --- Configuration ---
 st.set_page_config(layout="wide", page_title="Amazon Seller Reconciliation Dashboard")
-st.title("💰 Amazon Seller Central Reconciliation Dashboard (Stable)")
+st.title("💰 Amazon Seller Central Reconciliation Dashboard (Shipment Only)")
 st.markdown("---")
 
 # --- HELPER FUNCTIONS (CACHED FOR STABILITY) ---
@@ -27,7 +27,7 @@ def create_cost_sheet_template():
 
 @st.cache_data(show_spinner="Processing Cost Sheet...")
 def process_cost_sheet_bytes(file_bytes, file_name):
-    """Processes cost sheet from bytes to avoid file pointer issues."""
+    """Processes cost sheet from bytes."""
     required_cols = ['SKU', 'Product Cost']
     try:
         filename = file_name.lower()
@@ -41,7 +41,6 @@ def process_cost_sheet_bytes(file_bytes, file_name):
         
         df_cost.columns = [str(col).strip() for col in df_cost.columns]
         
-        # Check for missing columns
         missing_cols = [col for col in required_cols if col not in df_cost.columns]
         if missing_cols:
              return None, f"Missing columns: {', '.join(missing_cols)}"
@@ -50,7 +49,6 @@ def process_cost_sheet_bytes(file_bytes, file_name):
         df_cost['Sku'] = df_cost['Sku'].astype(str)
         df_cost['Product Cost'] = pd.to_numeric(df_cost['Product Cost'], errors='coerce').fillna(0)
         
-        # Aggregate duplicates
         df_cost_master = df_cost.groupby('Sku')['Product Cost'].mean().reset_index(name='Product Cost')
         return df_cost_master, None
 
@@ -58,7 +56,7 @@ def process_cost_sheet_bytes(file_bytes, file_name):
         return None, str(e)
 
 def calculate_fee_total(df, keyword, name):
-    """Calculates fee totals (helper for payment processing)."""
+    """Calculates fee totals."""
     if 'amount-description' not in df.columns:
         return pd.DataFrame({'OrderID': pd.Series(dtype='str'), name: pd.Series(dtype='float')})
 
@@ -87,7 +85,6 @@ def process_payment_zips_bytes(zip_file_bytes_list):
                     if name.lower().endswith('.txt'):
                         with zf.open(name) as f:
                             content = f.read()
-                            # Decoding logic
                             decoded_content = None
                             try:
                                 decoded_content = content.decode("utf-8")
@@ -95,7 +92,7 @@ def process_payment_zips_bytes(zip_file_bytes_list):
                                 try:
                                     decoded_content = content.decode("latin-1")
                                 except:
-                                    continue # Skip if cant decode
+                                    continue 
                             
                             if decoded_content:
                                 try:
@@ -106,7 +103,6 @@ def process_payment_zips_bytes(zip_file_bytes_list):
                                     for chunk in chunk_iter:
                                         chunk.columns = [str(col).strip().lower() for col in chunk.columns]
                                         if 'order-id' in chunk.columns and 'amount' in chunk.columns:
-                                            # Filter required columns immediately to save memory
                                             cols_to_keep = [c for c in required_cols_lower if c in chunk.columns]
                                             chunk_small = chunk[cols_to_keep].copy()
                                             chunk_small.dropna(subset=['order-id'], inplace=True)
@@ -121,7 +117,6 @@ def process_payment_zips_bytes(zip_file_bytes_list):
 
     try:
         df_charge_breakdown = pd.concat(all_payment_data, ignore_index=True)
-        # Free memory
         del all_payment_data
         gc.collect()
     except:
@@ -148,7 +143,6 @@ def process_payment_zips_bytes(zip_file_bytes_list):
     
     df_financial_master.fillna(0, inplace=True)
     
-    # Calculate KPI Fees
     fee_cols = ['Total_Commission_Fee', 'Total_Fixed_Closing_Fee', 'Total_FBA_Weight_Handling_Fee', 'Total_Technology_Fee']
     present_cols = [c for c in fee_cols if c in df_financial_master.columns]
     df_financial_master['Total_Fees_KPI'] = df_financial_master[present_cols].sum(axis=1)
@@ -164,7 +158,6 @@ def process_mtr_bytes(mtr_file_bytes_list):
 
     for file_bytes in mtr_file_bytes_list:
         try:
-            # Read entire file or chunks. Using chunks for safety.
             chunk_iter = pd.read_csv(io.BytesIO(file_bytes), chunksize=50000)
             for chunk in chunk_iter:
                 try:
@@ -191,7 +184,6 @@ def process_mtr_bytes(mtr_file_bytes_list):
 
     df_mtr_raw.rename(columns={'Order Id': 'OrderID', 'Invoice Amount': 'MTR Invoice Amount'}, inplace=True)
     
-    # Ensure columns exist
     for col in required_mtr_cols:
         target_col = 'OrderID' if col == 'Order Id' else ('MTR Invoice Amount' if col == 'Invoice Amount' else col)
         if target_col not in df_mtr_raw.columns:
@@ -207,11 +199,18 @@ def process_mtr_bytes(mtr_file_bytes_list):
 
 @st.cache_data(show_spinner="Merging Data...")
 def create_final_reconciliation_df(df_financial_master, df_logistics_master, df_cost_master):
-    """Merges all datasets."""
+    """Merges all datasets and filters for Shipments only."""
     
-    # Pre-check
     if df_logistics_master is None or df_financial_master is None:
         return pd.DataFrame()
+
+    # --- FILTER FOR SHIPMENT ONLY ---
+    if 'Transaction Type' in df_logistics_master.columns:
+        # Keep only rows where Transaction Type is 'Shipment' (case insensitive)
+        df_logistics_master = df_logistics_master[
+            df_logistics_master['Transaction Type'].astype(str).str.strip().str.lower() == 'shipment'
+        ]
+    # --------------------------------
 
     try:
         df_final = pd.merge(df_logistics_master, df_financial_master, on='OrderID', how='left')
@@ -239,7 +238,6 @@ def create_final_reconciliation_df(df_financial_master, df_logistics_master, df_
     for col in financial_cols_present:
         df_final[col] = pd.to_numeric(df_final[col], errors='coerce').fillna(0) * df_final['Proportion']
 
-    # Rename Net Payment
     if 'Net_Payment_Fetched' in df_final.columns:
         df_final.rename(columns={'Net_Payment_Fetched': 'Net Payment'}, inplace=True)
     elif 'Net Payment' not in df_final.columns:
@@ -254,20 +252,14 @@ def create_final_reconciliation_df(df_financial_master, df_logistics_master, df_
     
     df_final['Product Cost'] = pd.to_numeric(df_final['Product Cost'], errors='coerce').fillna(0)
 
-    # --- MODIFICATION: REMOVED REFUND/CANCEL COST LOGIC (20%/50%) ---
-    # The logic that used to multiply Product Cost by -0.2 for refunds/cancels has been removed.
-    # Product Cost will now remain exactly as per the Cost Sheet.
-
-    # Final Calc
+    # Final Calc (Standard Product Cost)
     df_final['Product Profit/Loss'] = (
         df_final['Net Payment'] -
         (df_final['Product Cost'] * df_final['Quantity'])
     )
 
-    # Cleanup
     df_final.drop(columns=['Total_MTR_per_Order', 'Item_Count_per_Order', 'Proportion'], inplace=True, errors='ignore')
     
-    # Ensure all Fee columns exist for display
     expected_cols = ['Total_Commission_Fee', 'Total_Fixed_Closing_Fee', 'Total_FBA_Pick_Pack_Fee', 
                      'Total_FBA_Weight_Handling_Fee', 'Total_Technology_Fee', 'Total_Tax_TCS_TDS', 'Total_Fees_KPI']
     for col in expected_cols:
@@ -279,10 +271,8 @@ def create_final_reconciliation_df(df_financial_master, df_logistics_master, df_
 def convert_to_excel_bytes(df):
     """Converts dataframe to Excel bytes efficiently."""
     output = io.BytesIO()
-    # Create a copy for formatting to not affect the original DF logic
     df_excel = df.copy()
     
-    # Rounding for Excel
     numeric_cols = df_excel.select_dtypes(include=[np.number]).columns
     for col in numeric_cols:
         if col != 'Quantity':
@@ -334,7 +324,7 @@ st.markdown("---")
 
 if payment_zip_files and mtr_files:
     
-    # 1. READ FILES INTO BYTES (Crucial for Streamlit Caching/Rerun stability)
+    # 1. READ FILES
     cost_bytes = cost_file.getvalue() if cost_file else None
     cost_name = cost_file.name if cost_file else ""
     
@@ -352,28 +342,27 @@ if payment_zip_files and mtr_files:
     # 3. PROCESS PAYMENTS
     df_financial_master, _ = process_payment_zips_bytes(payment_bytes_list)
     if df_financial_master is None:
-        st.error("Could not process Payment ZIPs. Please check if they contain valid .txt files.")
+        st.error("Could not process Payment ZIPs.")
         st.stop()
 
     # 4. PROCESS MTR
     df_logistics_master = process_mtr_bytes(mtr_bytes_list)
     if df_logistics_master is None:
-        st.error("Could not process MTR CSVs. Please check file format.")
+        st.error("Could not process MTR CSVs.")
         st.stop()
 
-    # 5. MERGE
+    # 5. MERGE (WITH SHIPMENT FILTER)
     df_reconciliation = create_final_reconciliation_df(df_financial_master, df_logistics_master, df_cost_master)
 
     if df_reconciliation.empty:
-         st.error("Reconciliation failed. No matching Order IDs found between Payment and MTR files.")
+         st.error("Reconciliation failed. No 'Shipment' transactions found or matching Order IDs.")
          st.stop()
 
-    # 6. GENERATE EXCEL (Cached)
+    # 6. GENERATE EXCEL
     excel_data = convert_to_excel_bytes(df_reconciliation)
 
     # --- DISPLAY DASHBOARD ---
     
-    # KPIs
     total_items = len(df_reconciliation)
     total_payment = df_reconciliation['Net Payment'].sum()
     total_mtr = df_reconciliation['MTR Invoice Amount'].sum()
@@ -385,7 +374,7 @@ if payment_zip_files and mtr_files:
     total_expenses = storage_fee + ads_spends + total_salary + miscellaneous_expenses
     net_profit = gross_profit - total_expenses
 
-    st.subheader("Key Business Metrics")
+    st.subheader("Key Business Metrics (Shipments Only)")
     kpi1, kpi2, kpi3, kpi4, kpi5 = st.columns(5)
     
     kpi1.metric("Net Payment", f"₹ {total_payment:,.0f}")
@@ -396,21 +385,18 @@ if payment_zip_files and mtr_files:
 
     st.markdown("---")
 
-    # DATA TABLE
     st.header("1. Item-Level Reconciliation Summary")
     
-    # Filter
     if 'OrderID' in df_reconciliation.columns:
         search_order = st.text_input("🔍 Search Order ID (Optional)", "")
         if search_order:
             df_display = df_reconciliation[df_reconciliation['OrderID'].str.contains(search_order, case=False)]
         else:
-            df_display = df_reconciliation.head(200) # Show only first 200 rows to prevent browser crash
-            st.caption("Showing top 200 rows for performance. Download Excel for full data.")
+            df_display = df_reconciliation.head(200)
+            st.caption("Showing top 200 rows. Download Excel for full data.")
     else:
         df_display = df_reconciliation.head(200)
 
-    # Display configuration
     st.dataframe(
         df_display,
         use_container_width=True,
@@ -424,19 +410,17 @@ if payment_zip_files and mtr_files:
 
     st.markdown("---")
 
-    # DOWNLOAD
     st.header("2. Download Full Report")
     
     st.download_button(
         label="📥 Download Full Excel Report",
         data=excel_data,
-        file_name='Amazon_Reconciliation_Final.xlsx',
+        file_name='Amazon_Reconciliation_Shipments_Only.xlsx',
         mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
         key='download_final_report'
     )
 
 else:
-    # Default State (No files)
     total_expenses = storage_fee + ads_spends + total_salary + miscellaneous_expenses
     st.subheader("Expenses Summary (No Files Uploaded)")
     st.metric("Total Expenses Input", f"₹ {total_expenses:,.2f}")
