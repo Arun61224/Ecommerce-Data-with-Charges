@@ -206,11 +206,9 @@ def create_final_reconciliation_df(df_financial_master, df_logistics_master, df_
 
     # --- FILTER FOR SHIPMENT ONLY ---
     if 'Transaction Type' in df_logistics_master.columns:
-        # Keep only rows where Transaction Type is 'Shipment' (case insensitive)
         df_logistics_master = df_logistics_master[
             df_logistics_master['Transaction Type'].astype(str).str.strip().str.lower() == 'shipment'
         ]
-    # --------------------------------
 
     try:
         df_final = pd.merge(df_logistics_master, df_financial_master, on='OrderID', how='left')
@@ -250,12 +248,18 @@ def create_final_reconciliation_df(df_financial_master, df_logistics_master, df_
     if 'Product Cost' not in df_final.columns:
         df_final['Product Cost'] = 0.0
     
+    # Force numeric conversion for Cost and Quantity
     df_final['Product Cost'] = pd.to_numeric(df_final['Product Cost'], errors='coerce').fillna(0)
+    df_final['Quantity'] = pd.to_numeric(df_final['Quantity'], errors='coerce').fillna(1)
+    
+    # --- FIX: EXPLICIT MULTIPLICATION COLUMN ---
+    # Create a Total Product Cost column so it's visible and used for calc
+    df_final['Total Product Cost'] = df_final['Product Cost'] * df_final['Quantity']
 
-    # Final Calc (Standard Product Cost)
+    # Final Calc using the TOTAL COST column
     df_final['Product Profit/Loss'] = (
         df_final['Net Payment'] -
-        (df_final['Product Cost'] * df_final['Quantity'])
+        df_final['Total Product Cost']
     )
 
     df_final.drop(columns=['Total_MTR_per_Order', 'Item_Count_per_Order', 'Proportion'], inplace=True, errors='ignore')
@@ -368,7 +372,8 @@ if payment_zip_files and mtr_files:
     total_mtr = df_reconciliation['MTR Invoice Amount'].sum()
     total_fees = df_reconciliation['Total_Fees_KPI'].sum()
     
-    total_prod_cost = (df_reconciliation['Product Cost'] * df_reconciliation['Quantity']).sum()
+    # Updated KPI to use the explicit Total Product Cost column
+    total_prod_cost = df_reconciliation['Total Product Cost'].sum()
     
     gross_profit = df_reconciliation['Product Profit/Loss'].sum()
     total_expenses = storage_fee + ads_spends + total_salary + miscellaneous_expenses
@@ -380,7 +385,7 @@ if payment_zip_files and mtr_files:
     kpi1.metric("Net Payment", f"₹ {total_payment:,.0f}")
     kpi2.metric("MTR Invoiced", f"₹ {total_mtr:,.0f}")
     kpi3.metric("Total Fees", f"₹ {total_fees:,.0f}")
-    kpi4.metric("Product Cost", f"₹ {total_prod_cost:,.0f}")
+    kpi4.metric("Total Product Cost", f"₹ {total_prod_cost:,.0f}")
     kpi5.metric("NET PROFIT", f"₹ {net_profit:,.0f}", delta=f"Exp: ₹ {total_expenses:,.0f}", delta_color="normal")
 
     st.markdown("---")
@@ -403,7 +408,7 @@ if payment_zip_files and mtr_files:
         hide_index=True,
         column_config={
             "Net Payment": st.column_config.NumberColumn(format="₹ %.2f"),
-            "MTR Invoice Amount": st.column_config.NumberColumn(format="₹ %.2f"),
+            "Total Product Cost": st.column_config.NumberColumn(format="₹ %.2f", help="Unit Cost * Quantity"),
             "Product Profit/Loss": st.column_config.NumberColumn(format="₹ %.2f"),
         }
     )
