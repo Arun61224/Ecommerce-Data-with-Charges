@@ -296,6 +296,18 @@ def convert_to_excel_bytes(df):
     # Rounding for Excel
     numeric_cols = df_excel.select_dtypes(include=[np.number]).columns
     for col in numeric_cols:
+# Cost merge के बाद (Line 294-298 के बाद) यह add करें:
+
+if df_cost_master is not None and not df_cost_master.empty:
+    df_final = pd.merge(df_final, df_cost_master, on='Sku', how='left')
+
+if 'Product Cost' not in df_final.columns:
+    df_final['Product Cost'] = 0.0
+
+df_final['Product Cost'] = pd.to_numeric(df_final['Product Cost'], errors='coerce').fillna(0)
+
+# ✅ YEH ADD KAREIN - Unit cost ko Quantity se multiply karein
+df_final['Product Cost'] = df_final['Product Cost'] * df_final['Quantity']
         if col != 'Quantity':
             df_excel[col] = df_excel[col].round(2)
 
@@ -452,4 +464,5 @@ else:
     st.subheader("Expenses Summary (No Files Uploaded)")
     st.metric("Total Expenses Input", f"₹ {total_expenses:,.2f}")
     st.info("👈 Please upload Cost Sheet, Payment Zips, and MTR CSVs in the sidebar.")
+
 
