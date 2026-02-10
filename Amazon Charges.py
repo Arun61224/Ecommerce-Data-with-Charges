@@ -254,20 +254,9 @@ def create_final_reconciliation_df(df_financial_master, df_logistics_master, df_
     
     df_final['Product Cost'] = pd.to_numeric(df_final['Product Cost'], errors='coerce').fillna(0)
 
-    # Transaction Type Logic (Refunds/Cancels)
-    if 'Transaction Type' in df_final.columns:
-        ttype = df_final['Transaction Type'].astype(str).str.strip().str.lower()
-        
-        conditions = [
-            ttype.isin(['refund', 'freereplacement']),
-            ttype.str.contains('cancel')
-        ]
-        choices = [
-            -0.2 * df_final['Product Cost'], # Refund Cost
-            -0.2 * df_final['Product Cost']  # Cancel Cost
-        ]
-        
-        df_final['Product Cost'] = np.select(conditions, choices, default=df_final['Product Cost'])
+    # --- MODIFICATION: REMOVED REFUND/CANCEL COST LOGIC (20%/50%) ---
+    # The logic that used to multiply Product Cost by -0.2 for refunds/cancels has been removed.
+    # Product Cost will now remain exactly as per the Cost Sheet.
 
     # Final Calc
     df_final['Product Profit/Loss'] = (
@@ -452,4 +441,3 @@ else:
     st.subheader("Expenses Summary (No Files Uploaded)")
     st.metric("Total Expenses Input", f"₹ {total_expenses:,.2f}")
     st.info("👈 Please upload Cost Sheet, Payment Zips, and MTR CSVs in the sidebar.")
-
